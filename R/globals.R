@@ -1,0 +1,32 @@
+utils::globalVariables(
+  c(
+    "A",
+    "Bca",
+    "Nda",
+    "bsa",
+    "control_episode",
+    "et",
+    "feature_name",
+    "history_match",
+    "history_signature",
+    "id",
+    "n_0",
+    "n_1",
+    "n_control",
+    "n_obs_window",
+    "n_support_obs",
+    "n_treated",
+    "stack_weight",
+    "stable_off",
+    "stable_on",
+    "stratum",
+    "subexp.id",
+    "switch01",
+    "switch01_number",
+    "time",
+    "treated",
+    "treated_episode",
+    "treated_sa",
+    "weights"
+  )
+)

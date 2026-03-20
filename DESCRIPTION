@@ -1,0 +1,32 @@
+Package: cbwsdid
+Title: Covariate-Balanced Weighted Stacked Difference-in-Differences
+Version: 0.0.1
+Authors@R: 
+    person("Vadim", "Ustyuzhanin", , "vadim.v.ustyuzhanin@gmail.com", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0003-3800-1108"))
+Description: Tools for weighted stacked difference-in-differences and
+    covariate-balanced weighted stacked difference-in-differences in panel
+    data with staggered treatment timing, repeated 0->1 switch-on designs,
+    and repeated 1->0 switch-off designs.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends: 
+    R (>= 4.2.0)
+Imports:
+    cobalt,
+    dplyr,
+    fixest,
+    magrittr,
+    MatchIt,
+    purrr,
+    rlang,
+    stringr,
+    tibble,
+    tidyr,
+    WeightIt
+Suggests:
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
