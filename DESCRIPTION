@@ -30,3 +30,5 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
+URL: https://github.com/vadvu/cbwsdid
+BugReports: https://github.com/vadvu/cbwsdid/issues
