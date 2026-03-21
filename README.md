@@ -34,14 +34,14 @@ devtools::install_github("vadvu/cbwsdid")
 library(cbwsdid)
 
 fit <- cbwsdid(
-  data = panel_df,
-  y = "y",
-  d = "d",
+  data = panel_df, # dataset with id-time as unit of analysis
+  y = "y", # dependent variable
+  d = "d", # treatment variable
   id = c("unit", "time"),
   kappa = c(-4, 4),
   refinement.method = "none"
 )
 
-cbwsdid_qoi(fit, type = "simple")
-cbwsdid_qoi(fit, type = "dynamic")
+cbwsdid_qoi(fit, type = "simple") # for att
+cbwsdid_qoi(fit, type = "dynamic") # for event study estimates 
 ```

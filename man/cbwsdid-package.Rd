@@ -7,6 +7,14 @@
 \description{
 Package-level documentation and imports for \code{cbwsdid}.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/vadvu/cbwsdid}
+  \item Report bugs at \url{https://github.com/vadvu/cbwsdid/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Vadim Ustyuzhanin \email{vadim.v.ustyuzhanin@gmail.com} (\href{https://orcid.org/0000-0003-3800-1108}{ORCID})
 

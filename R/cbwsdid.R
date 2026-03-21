@@ -9,6 +9,11 @@
 #' @param id character array. A length-2 character vector giving the unit and time identifiers. For example, `c("id", "time")`
 #' @param kappa Numeric array. A length-2 numeric vector with the event-time window `c(kappa_pre, kappa_post)`. For example, `c(-2, 2)`
 #' @param design Design type. One of `"absorbing"` (staggered adoption), `"switch01"`, or `"switch10"`.
+#' @param post_path Only used if `design != "absorbing"`. One of `"stable"` or
+#'   `"relaxed"`. Under `"stable"`, treated episodes must remain treated
+#'   throughout the post-treatment window. Under `"relaxed"`, treated episodes
+#'   are defined only by treatment onset at event time zero and may subsequently
+#'   reverse within the event window.
 #' @param history.length Only used if design != `"absorbing"`. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.
 #' @param first_switch_only Only used if design != `"absorbing"`. Logical. If `TRUE`, keep only the first admissible switch episode for each unit in switch designs.
 #' @param refinement.method Refinement method. One of `"none"` (for weighted stacked did without refinement), `"matchit"`, or `"weightit"`.
@@ -16,6 +21,23 @@
 #' @param exact.formula Optional formula describing exact matching or exact stratification variables. for example, `~ region`.
 #' @param refinement.args Optional named list of arguments passed to the chosen refinement backend. See [MatchIt::matchit()] ot [WeightIt::weightit()]. 
 #' @param allow_treated_drop Logical. If `TRUE`, allow the refinement stage to drop treated units or episodes, which changes the estimand to a matched-sample or overlap-trimmed ATT.
+#'
+#' @details
+#' The `design` argument determines how primary subexperiments are constructed.
+#' `"absorbing"` implements the standard staggered-adoption design. `"switch01"`
+#' constructs subexperiments around repeated `0 -> 1` switch-on episodes.
+#' `"switch10"` applies the same switch-on logic after internally recoding the
+#' treatment as `1 - d`, which makes it convenient to study repeated `1 -> 0`
+#' switch-off episodes with the same pipeline.
+#'
+#' For switch-based designs, `post_path` controls the post-treatment path
+#' restriction on treated episodes. `"stable"` requires treated episodes to
+#' remain treated throughout the event window and therefore targets effects of
+#' sustained exposure within that window. `"relaxed"` requires only treatment
+#' onset at event time zero and allows later treatment reversals within the
+#' window, so post-treatment coefficients should be interpreted as effects of
+#' treatment onset averaged over subsequent realized treatment paths.
+#'
 #' @return A `fixest` model object from [fixest::feols()] with additional `cbwsdid` metadata stored in `attr(x, "cbwsdid")`.
 #' @export
 #'
@@ -36,6 +58,7 @@ cbwsdid <- function(data = data,
                     id = c("country", "year"),
                     kappa = c(-10, 10),
                     design = c("absorbing", "switch01", "switch10"),
+                    post_path = c("stable", "relaxed"),
                     history.length = NULL,
                     first_switch_only = FALSE,
                     refinement.method = c("none", "matchit", "weightit"),
@@ -45,6 +68,7 @@ cbwsdid <- function(data = data,
                     allow_treated_drop = FALSE
                     ){
   design <- match.arg(design)
+  post_path <- match.arg(post_path)
   refinement.method <- match.arg(refinement.method)
   refinement.vars <- unique(c(all.vars(covs.formula), all.vars(exact.formula)))
   refinement.source.vars <- setdiff(refinement.vars, c("id", "time", "y", "d"))
@@ -100,7 +124,8 @@ cbwsdid <- function(data = data,
       db = db,
       kappa = kappa,
       history.length = history.length,
-      first_switch_only = first_switch_only
+      first_switch_only = first_switch_only,
+      post_path = post_path
     )
     
     if(nrow(candidates) == 0){
@@ -118,7 +143,8 @@ cbwsdid <- function(data = data,
           h = unlist(cand.i$h),
           kappa = kappa,
           history.length = history.length,
-          first_switch_only = first_switch_only
+          first_switch_only = first_switch_only,
+          post_path = post_path
         )
         
         subexp.refine(subexp = sub.i,
@@ -167,6 +193,7 @@ cbwsdid <- function(data = data,
     kappa = kappa,
     design = design,
     treatment_recode = identical(design, "switch10"),
+    post_path = post_path,
     history.length = history.length,
     first_switch_only = first_switch_only,
     candidates = candidates,
@@ -215,7 +242,10 @@ subexp.row.construct <- function(db, a, kappa){
 switch01_candidates <- function(db,
                                 kappa = c(-4, 2),
                                 history.length = 4,
-                                first_switch_only = FALSE){
+                                first_switch_only = FALSE,
+                                post_path = c("stable", "relaxed")){
+  post_path <- match.arg(post_path)
+
   if(history.length < 1){
     stop("`history.length` must be a positive integer.")
   }
@@ -243,9 +273,13 @@ switch01_candidates <- function(db,
     filter(
       .data$switch01,
       if_all(all_of(history.cols), ~ !is.na(.x)),
-      if_all(all_of(post.cols), ~ !is.na(.x)),
-      if_all(all_of(post.cols), ~ .x == 1)
+      if_all(all_of(post.cols), ~ !is.na(.x))
     )
+
+  if(identical(post_path, "stable")){
+    anchor <- anchor %>%
+      filter(if_all(all_of(post.cols), ~ .x == 1))
+  }
   
   if(first_switch_only){
     anchor <- anchor %>% 
@@ -274,7 +308,10 @@ subexp.switch01.construct <- function(db,
                                       h,
                                       kappa,
                                       history.length = length(h),
-                                      first_switch_only = FALSE){
+                                      first_switch_only = FALSE,
+                                      post_path = c("stable", "relaxed")){
+  post_path <- match.arg(post_path)
+
   if(is.null(h) || length(h) == 0){
     stop("`h` must be a non-empty 0/1 vector describing recent treatment history.")
   }
@@ -370,12 +407,18 @@ subexp.switch01.construct <- function(db,
     all(!is.na(x) & x == 0)
   })
   
+  treated_episode <- if(identical(post_path, "stable")){
+    history.match & anchor.sample$switch01 & stable.on
+  } else {
+    history.match & anchor.sample$switch01
+  }
+
   anchor.sample <- anchor.sample %>% 
     mutate(
       history_match = history.match,
       stable_on = stable.on,
       stable_off = stable.off,
-      treated_episode = history_match & switch01 & stable_on,
+      treated_episode = treated_episode,
       control_episode = history_match & d == 0 & stable_off
     )
   
@@ -454,7 +497,7 @@ subexp.refine <- function(subexp,
   }
   
   # ---------------------------------------------------------------------------
-  # 1. Parse user formulas in a PanelMatch-like style
+  # 1. Parse user formulas in a PanelMatch style but without I()
   # ---------------------------------------------------------------------------
   #
   # Supported syntax for now:
@@ -685,10 +728,7 @@ subexp.refine <- function(subexp,
   # ---------------------------------------------------------------------------
   # 3. Estimate raw design weights b_sa
   # ---------------------------------------------------------------------------
-  #
-  # exact.formula is treated as an extra layer of exact stratification rather
-  # than a separate refinement method.
-  # ---------------------------------------------------------------------------
+
   if(refinement.method == "none"){
     design.weights <- build_exact_or_unweighted(
       design.sample = design.sample,

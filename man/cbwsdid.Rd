@@ -11,6 +11,7 @@ cbwsdid(
   id = c("country", "year"),
   kappa = c(-10, 10),
   design = c("absorbing", "switch01", "switch10"),
+  post_path = c("stable", "relaxed"),
   history.length = NULL,
   first_switch_only = FALSE,
   refinement.method = c("none", "matchit", "weightit"),
@@ -33,6 +34,12 @@ cbwsdid(
 
 \item{design}{Design type. One of \code{"absorbing"} (staggered adoption), \code{"switch01"}, or \code{"switch10"}.}
 
+\item{post_path}{Only used if \code{design != "absorbing"}. One of \code{"stable"} or
+\code{"relaxed"}. Under \code{"stable"}, treated episodes must remain treated
+throughout the post-treatment window. Under \code{"relaxed"}, treated episodes
+are defined only by treatment onset at event time zero and may subsequently
+reverse within the event window.}
+
 \item{history.length}{Only used if design != \code{"absorbing"}. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.}
 
 \item{first_switch_only}{Only used if design != \code{"absorbing"}. Logical. If \code{TRUE}, keep only the first admissible switch episode for each unit in switch designs.}
@@ -52,6 +59,22 @@ A \code{fixest} model object from \code{\link[fixest:feols]{fixest::feols()}} wi
 }
 \description{
 Fits covariate-balanced weighted stacked difference-in-differences on a panel dataset and returns a \code{fixest} model object.
+}
+\details{
+The \code{design} argument determines how primary subexperiments are constructed.
+\code{"absorbing"} implements the standard staggered-adoption design. \code{"switch01"}
+constructs subexperiments around repeated \code{0 -> 1} switch-on episodes.
+\code{"switch10"} applies the same switch-on logic after internally recoding the
+treatment as \code{1 - d}, which makes it convenient to study repeated \code{1 -> 0}
+switch-off episodes with the same pipeline.
+
+For switch-based designs, \code{post_path} controls the post-treatment path
+restriction on treated episodes. \code{"stable"} requires treated episodes to
+remain treated throughout the event window and therefore targets effects of
+sustained exposure within that window. \code{"relaxed"} requires only treatment
+onset at event time zero and allows later treatment reversals within the
+window, so post-treatment coefficients should be interpreted as effects of
+treatment onset averaged over subsequent realized treatment paths.
 }
 \examples{
 \dontrun{
