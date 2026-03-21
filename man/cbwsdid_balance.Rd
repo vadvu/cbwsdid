@@ -16,13 +16,12 @@ cbwsdid_balance(
 
 \item{include_exact}{Logical. If \code{TRUE}, include variables from \code{exact.formula} in the balance output.}
 
-\item{which}{Which standardized mean difference table to return: \code{"both"}, \code{"adj"}, or \code{"un"}.}
+\item{which}{Character. Which standardized mean difference table to return: \code{"both"}, \code{"adj"}, or \code{"un"}.}
 
 \item{return_cobalt}{Logical. If \code{TRUE}, also return the underlying \code{\link[cobalt:bal.tab]{cobalt::bal.tab()}} objects.}
 }
 \value{
-A list with compact balance tables for the pooled sample and for each
-subexperiment.
+A list with compact balance tables for the pooled sample and for each subexperiment.
 }
 \description{
 Computes standardized mean difference tables for the refinement covariates used in \code{\link[=cbwsdid]{cbwsdid()}}. Diagnostics are computed within subexperiments using the first-stage refinement weights rather than the final stacked weights.

@@ -4,11 +4,10 @@
 #'
 #' @param model `fixest` model object returned by [cbwsdid()].
 #' @param include_exact Logical. If `TRUE`, include variables from `exact.formula` in the balance output.
-#' @param which Which standardized mean difference table to return: `"both"`, `"adj"`, or `"un"`.
+#' @param which Character. Which standardized mean difference table to return: `"both"`, `"adj"`, or `"un"`.
 #' @param return_cobalt Logical. If `TRUE`, also return the underlying [cobalt::bal.tab()] objects.
 #'
-#' @return A list with compact balance tables for the pooled sample and for each
-#'   subexperiment.
+#' @return A list with compact balance tables for the pooled sample and for each subexperiment.
 #' @export
 #'
 #' @examples
@@ -54,6 +53,7 @@ cbwsdid_balance <- function(model,
     }
     
     df %>% 
+      dplyr::filter(!is.na(.data[[value_col]])) %>% 
       dplyr::transmute(
         et = .data$period,
         variable = .data$variable,
@@ -130,6 +130,8 @@ cbwsdid_balance <- function(model,
        sum(bal.data$treated_sa == 0) == 0){
       return(empty_out)
     }
+
+    n_treated_refined <- sum(bal.data$treated_sa == 1)
     
     control.weights <- bal.data$bsa[bal.data$treated_sa == 0]
     tol <- sqrt(.Machine$double.eps)
@@ -161,9 +163,10 @@ cbwsdid_balance <- function(model,
       dplyr::inner_join(feature.spec, by = "covariate") %>% 
       dplyr::mutate(
         subexp.id = subexp.id,
-        n_treated = sum(design.sample$treated_sa == 1),
+        n_treated = n_treated_refined,
         .before = 1
       ) %>% 
+      dplyr::filter(!(is.na(.data$Diff.Un) & is.na(.data$Diff.Adj))) %>% 
       dplyr::select("subexp.id",
                     "n_treated",
                     "covariate",
@@ -173,7 +176,7 @@ cbwsdid_balance <- function(model,
     
     return(list(
       subexp.id = subexp.id,
-      n_treated = sum(design.sample$treated_sa == 1),
+      n_treated = n_treated_refined,
       long = bal.df,
       cobalt = if(return_cobalt) bal.obj else NULL
     ))

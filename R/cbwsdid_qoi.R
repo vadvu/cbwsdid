@@ -100,7 +100,7 @@ cbwsdid_qoi <- function(model,
   
   tibble::tibble(
     type = "simple",
-    periods = paste(post, collapse = ", "),
+    periods = paste0(min(post), " - ", max(post)),
     n_periods = length(post),
     estimate = estimate,
     std.error = std.error,
