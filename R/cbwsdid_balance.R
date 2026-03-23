@@ -142,9 +142,22 @@ cbwsdid_balance <- function(model,
        all(control.weights <= tol, na.rm = TRUE)){
       return(empty_out)
     }
+
+    varying.covs <- feature.spec$covariate[purrr::map_lgl(feature.spec$covariate, function(v) {
+      x <- bal.data[[v]]
+      x <- x[!is.na(x)]
+      dplyr::n_distinct(x) > 1
+    })]
+
+    if (length(varying.covs) == 0) {
+      return(empty_out)
+    }
+
+    feature.spec <- feature.spec %>%
+      dplyr::filter(.data$covariate %in% varying.covs)
     
     bal.formula <- stats::reformulate(
-      termlabels = feature.spec$covariate,
+      termlabels = varying.covs,
       response = "treated_sa"
     )
     
