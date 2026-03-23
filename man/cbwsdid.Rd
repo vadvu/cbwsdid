@@ -68,6 +68,10 @@ constructs subexperiments around repeated \code{0 -> 1} switch-on episodes.
 treatment as \code{1 - d}, which makes it convenient to study repeated \code{1 -> 0}
 switch-off episodes with the same pipeline.
 
+In \code{covs.formula} and \code{exact.formula}, variables can be referenced either by
+the standardized internal names \code{id}, \code{time}, \code{y}, and \code{d}, or by the
+original variable names supplied to the corresponding function arguments.
+
 For switch-based designs, \code{post_path} controls the post-treatment path
 restriction on treated episodes. \code{"stable"} requires treated episodes to
 remain treated throughout the event window and therefore targets effects of

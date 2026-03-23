@@ -30,6 +30,10 @@
 #' treatment as `1 - d`, which makes it convenient to study repeated `1 -> 0`
 #' switch-off episodes with the same pipeline.
 #'
+#' In `covs.formula` and `exact.formula`, variables can be referenced either by
+#' the standardized internal names `id`, `time`, `y`, and `d`, or by the
+#' original variable names supplied to the corresponding function arguments.
+#'
 #' For switch-based designs, `post_path` controls the post-treatment path
 #' restriction on treated episodes. `"stable"` requires treated episodes to
 #' remain treated throughout the event window and therefore targets effects of
@@ -73,6 +77,10 @@ cbwsdid <- function(data = data,
   refinement.vars <- unique(c(all.vars(covs.formula), all.vars(exact.formula)))
   refinement.source.vars <- setdiff(refinement.vars, c("id", "time", "y", "d"))
   keep.vars <- unique(c(id, y, d, refinement.source.vars))
+  var_aliases <- stats::setNames(
+    c("id", "time", "y", "d"),
+    c(id[1], id[2], y, d)
+  )
   
   db <- data %>% 
     select(all_of(keep.vars)) %>% 
@@ -106,6 +114,7 @@ cbwsdid <- function(data = data,
                                       a = x,
                                       kappa = kappa)
         subexp.refine(subexp = sub.i,
+                      var_aliases = var_aliases,
                       covs.formula = covs.formula,
                       refinement.method = refinement.method,
                       exact.formula = exact.formula,
@@ -148,6 +157,7 @@ cbwsdid <- function(data = data,
         )
         
         subexp.refine(subexp = sub.i,
+                      var_aliases = var_aliases,
                       covs.formula = covs.formula,
                       refinement.method = refinement.method,
                       exact.formula = exact.formula,
@@ -473,6 +483,7 @@ subexp.switch01.construct <- function(db,
 
 
 subexp.refine <- function(subexp,
+                          var_aliases = NULL,
                           covs.formula = NULL,
                           refinement.method = c("none", "matchit", "weightit"),
                           exact.formula = NULL,
@@ -522,10 +533,21 @@ subexp.refine <- function(subexp,
     }
     list(expr)
   }
+
+  normalize_var_name <- function(var.name){
+    if(is.null(var_aliases) || !length(var_aliases)){
+      return(var.name)
+    }
+    if(var.name %in% names(var_aliases)){
+      return(unname(var_aliases[[var.name]]))
+    }
+    var.name
+  }
   
   parse_feature_formula <- function(formula.obj){
     if(is.null(formula.obj)){
       return(tibble(source_var = character(),
+                    data_var = character(),
                     lag_k = integer(),
                     et_lookup = integer(),
                     feature_name = character(),
@@ -538,6 +560,7 @@ subexp.refine <- function(subexp,
     feature.spec <- purrr::map_dfr(raw.terms, function(term){
       if(is.numeric(term) && length(term) == 1 && term == 1){
         return(tibble(source_var = character(),
+                      data_var = character(),
                       lag_k = integer(),
                       et_lookup = integer(),
                       feature_name = character(),
@@ -546,7 +569,9 @@ subexp.refine <- function(subexp,
       
       if(is.symbol(term)){
         var.name <- as.character(term)
+        data.var <- normalize_var_name(var.name)
         return(tibble(source_var = var.name,
+                      data_var = data.var,
                       lag_k = 0L,
                       et_lookup = -1L,
                       feature_name = var.name,
@@ -555,10 +580,12 @@ subexp.refine <- function(subexp,
       
       if(rlang::is_call(term, "lag")){
         var.name <- as.character(term[[2]])
+        data.var <- normalize_var_name(var.name)
         lag.values <- rlang::eval_bare(term[[3]], env = baseenv()) %>% 
           as.integer()
         
         return(tibble(source_var = var.name,
+                      data_var = data.var,
                       lag_k = lag.values,
                       et_lookup = -lag.values,
                       feature_name = paste0(var.name, "_l", lag.values),
@@ -601,7 +628,7 @@ subexp.refine <- function(subexp,
         filter(et == spec.i$et_lookup) %>% 
         transmute(id,
                   subexp.id,
-                  feature_value = .data[[spec.i$source_var]]) %>% 
+                  feature_value = .data[[spec.i$data_var]]) %>% 
         distinct()
       
       names(tmp)[names(tmp) == "feature_value"] <- spec.i$feature_name
