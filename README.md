@@ -44,4 +44,6 @@ fit <- cbwsdid(
 
 cbwsdid_qoi(fit, type = "simple") # for att
 cbwsdid_qoi(fit, type = "dynamic") # for event study estimates 
+
+iplot(fit) # event study plot using fixest function
 ```
