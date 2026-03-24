@@ -24,7 +24,7 @@
 #' cbwsdid_balance(fit)
 #' }
 cbwsdid_balance <- function(model,
-                            include_exact = FALSE,
+                            include_exact = TRUE,
                             which = c("both", "adj", "un"),
                             return_cobalt = FALSE){
   which <- match.arg(which)
