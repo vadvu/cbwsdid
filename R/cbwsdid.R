@@ -1,4 +1,3 @@
-
 #' Covariate-Balanced Weighted Stacked DID
 #'
 #' Fits covariate-balanced weighted stacked difference-in-differences on a panel dataset and returns a `fixest` model object.
@@ -8,6 +7,12 @@
 #' @param d Character. Name of the binary treatment indicator.
 #' @param id character array. A length-2 character vector giving the unit and time identifiers. For example, `c("id", "time")`
 #' @param kappa Numeric array. A length-2 numeric vector with the event-time window `c(kappa_pre, kappa_post)`. For example, `c(-2, 2)`
+#' @param refinement.method Refinement method. One of `"none"` (for weighted stacked did without refinement), `"matchit"`, or `"weightit"`.
+#' @param covs.formula Optional formula describing refinement covariates. For example `~ lag(y, 1:4) + lag(x, 1:4)`.
+#' @param exact.formula Optional formula describing exact matching or exact stratification variables. For example, `~ region`.
+#' @param moderation.formula Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as `covs.formula`, for example `~ lag(y, 1)` or `~ lag(y, 1) + region`. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.
+#' @param refinement.args Optional named list of arguments passed to the chosen refinement backend. See [MatchIt::matchit()] ot [WeightIt::weightit()]. 
+#' @param allow_treated_drop Logical. If `TRUE`, allow the refinement stage to drop treated units or episodes, which changes the estimand to a matched-sample or overlap-trimmed ATT.
 #' @param design Design type. One of `"absorbing"` (staggered adoption), `"switch01"`, or `"switch10"`.
 #' @param post_path Only used if `design != "absorbing"`. One of `"stable"` or
 #'   `"relaxed"`. Under `"stable"`, treated episodes must remain treated
@@ -16,11 +21,9 @@
 #'   reverse within the event window.
 #' @param history.length Only used if design != `"absorbing"`. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.
 #' @param first_switch_only Only used if design != `"absorbing"`. Logical. If `TRUE`, keep only the first admissible switch episode for each unit in switch designs.
-#' @param refinement.method Refinement method. One of `"none"` (for weighted stacked did without refinement), `"matchit"`, or `"weightit"`.
-#' @param covs.formula Optional formula describing refinement covariates. For example `~ lag(y, 1:4) + lag(x, 1:4)`.
-#' @param exact.formula Optional formula describing exact matching or exact stratification variables. for example, `~ region`.
-#' @param refinement.args Optional named list of arguments passed to the chosen refinement backend. See [MatchIt::matchit()] ot [WeightIt::weightit()]. 
-#' @param allow_treated_drop Logical. If `TRUE`, allow the refinement stage to drop treated units or episodes, which changes the estimand to a matched-sample or overlap-trimmed ATT.
+#' @param pooled Logical. If `TRUE`, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.
+#' @param parallel Logical. If `TRUE`, compute primary sub-experiments in parallel.
+#' @param slaves Optional integer. Number of parallel workers to use when `parallel = TRUE`. If `NULL`, a conservative default based on available cores is used.
 #'
 #' @details
 #' The `design` argument determines how primary subexperiments are constructed.
@@ -33,6 +36,12 @@
 #' In `covs.formula` and `exact.formula`, variables can be referenced either by
 #' the standardized internal names `id`, `time`, `y`, and `d`, or by the
 #' original variable names supplied to the corresponding function arguments.
+#'
+#' If `moderation.formula` is supplied, the same variable-reference rules apply.
+#' The listed moderators are treated as pre-treatment characteristics that fully
+#' modify the treatment effect in additional second-stage regressions. The main
+#' returned object remains the baseline dynamic event-study model without
+#' moderation; moderated models are stored in the `"cbwsdid"` metadata.
 #'
 #' For switch-based designs, `post_path` controls the post-treatment path
 #' restriction on treated episodes. `"stable"` requires treated episodes to
@@ -56,6 +65,7 @@
 #'   refinement.method = "none"
 #' )
 #' }
+
 cbwsdid <- function(data = data, 
                     y = "y", 
                     d = "d", 
@@ -68,13 +78,21 @@ cbwsdid <- function(data = data,
                     refinement.method = c("none", "matchit", "weightit"),
                     covs.formula = NULL,
                     exact.formula = NULL,
+                    pooled = TRUE,
+                    moderation.formula = NULL,
+                    parallel = FALSE,
+                    slaves = NULL,
                     refinement.args = NULL,
                     allow_treated_drop = FALSE
                     ){
   design <- match.arg(design)
   post_path <- match.arg(post_path)
   refinement.method <- match.arg(refinement.method)
-  refinement.vars <- unique(c(all.vars(covs.formula), all.vars(exact.formula)))
+  refinement.vars <- unique(c(
+    all.vars(covs.formula),
+    all.vars(exact.formula),
+    all.vars(moderation.formula)
+  ))
   refinement.source.vars <- setdiff(refinement.vars, c("id", "time", "y", "d"))
   keep.vars <- unique(c(id, y, d, refinement.source.vars))
   var_aliases <- stats::setNames(
@@ -94,8 +112,47 @@ cbwsdid <- function(data = data,
     db <- db %>% 
       mutate(d = 1 - d)
   }
-  
-  # Checks: td
+
+  resolved.slaves <- 1L
+  if(isTRUE(parallel)){
+    if(!requireNamespace("future", quietly = TRUE) ||
+       !requireNamespace("future.apply", quietly = TRUE)){
+      stop(
+        "Parallel execution requires the optional packages `future` and ",
+        "`future.apply`. Please install them or set `parallel = FALSE`."
+      )
+    }
+
+    if(is.null(slaves)){
+      detected.cores <- parallel::detectCores()
+      if(is.na(detected.cores) || detected.cores < 2){
+        resolved.slaves <- 1L
+      } else {
+        resolved.slaves <- max(1L, as.integer(detected.cores - 1L))
+      }
+    } else {
+      resolved.slaves <- as.integer(slaves[1])
+      if(is.na(resolved.slaves) || resolved.slaves < 1L){
+        stop("`slaves` must be a positive integer or `NULL`.")
+      }
+    }
+  }
+
+  apply_subexp <- function(X, FUN){
+    if(!isTRUE(parallel) || resolved.slaves <= 1L){
+      return(lapply(X, FUN))
+    }
+
+    old.plan <- future::plan()
+    on.exit(future::plan(old.plan), add = TRUE)
+    future::plan(future::multisession, workers = resolved.slaves)
+
+    future.apply::future_lapply(
+      X,
+      FUN,
+      future.seed = TRUE
+    )
+  }
   
   if(design == "absorbing"){
     db <- db %>% 
@@ -107,7 +164,7 @@ cbwsdid <- function(data = data,
     
     candidates <- sort(unique(db$A[is.finite(db$A)]))
     
-    subexp.results <- lapply(
+    subexp.results <- apply_subexp(
       candidates,
       FUN = function(x){
         sub.i <- subexp.row.construct(db = db,
@@ -141,7 +198,7 @@ cbwsdid <- function(data = data,
       stop("No admissible 0->1 episode types were found for the requested design and window.")
     }
     
-    subexp.results <- lapply(
+    subexp.results <- apply_subexp(
       seq_len(nrow(candidates)),
       FUN = function(i){
         cand.i <- candidates[i, ]
@@ -178,13 +235,124 @@ cbwsdid <- function(data = data,
   subexp.all.weighted <- compute_stack_weights(subexp.all)
   
   subexp.all.data <- subexp.all.weighted$subexp.weighted
-
+  subexp.all.data <- subexp.all.data %>%
+    mutate(
+      post = as.integer(et >= 0),
+      treated_post = treated_sa * post
+    )
   
   model <- feols(data = subexp.all.data, 
                  y ~ i(et, treated_sa, ref = -1) | id^subexp.id + time^subexp.id,
                  cluster = ~id, 
                  weights = ~Qsa
   )
+  
+  pooled_model <- NULL
+  if(isTRUE(pooled)){
+    pooled_model <- feols(
+      data = subexp.all.data,
+      y ~ treated_post | id^subexp.id + time^subexp.id,
+      cluster = ~id,
+      weights = ~Qsa
+    )
+  }
+  
+  moderation_model <- NULL
+  pooled_moderation_model <- NULL
+  moderation_reference <- NULL
+  moderation_expanded_cols <- character()
+  moderation.spec <- parse_feature_formula_cbwsdid(
+    moderation.formula,
+    var_aliases = var_aliases
+  )
+  
+  if(nrow(moderation.spec) > 0){
+    warn_post_treatment_features_cbwsdid(moderation.spec)
+    
+    moderation.sample <- build_feature_sample_cbwsdid(
+      subexp = subexp.all.data,
+      feature.spec = moderation.spec,
+      include_treated = FALSE
+    )
+    
+    if(nrow(moderation.sample) > 0){
+      moderation_reference <- moderation.sample %>%
+        dplyr::select(any_of(moderation.spec$feature_name))
+
+      moderation.join.keys <- moderation.sample %>%
+        select(id, subexp.id) %>%
+        distinct()
+      moderation.new.cols <- setdiff(moderation.spec$feature_name, names(subexp.all.data))
+      moderation.add <- moderation.sample %>%
+        select(any_of(c("id", "subexp.id", moderation.new.cols)))
+      
+      moderation.data <- subexp.all.data %>%
+        inner_join(moderation.join.keys, by = c("id", "subexp.id")) %>%
+        left_join(moderation.add, by = c("id", "subexp.id"))
+      
+      moderator.model <- expand_moderators_for_model_cbwsdid(
+        data = moderation.data,
+        moderator_cols = moderation.spec$feature_name
+      )
+      moderation.data <- moderator.model$data
+      moderator.cols <- moderator.model$cols
+      moderation_expanded_cols <- moderator.cols
+      
+      if(length(moderator.cols) > 0){
+        dynamic_interaction_cols <- paste0("treated_x_", moderator.cols)
+        pooled_interaction_cols <- paste0("treated_post_x_", moderator.cols)
+        
+        for(i in seq_along(moderator.cols)){
+          moderation.data[[dynamic_interaction_cols[i]]] <-
+            moderation.data$treated_sa * moderation.data[[moderator.cols[i]]]
+          moderation.data[[pooled_interaction_cols[i]]] <-
+            moderation.data$treated_post * moderation.data[[moderator.cols[i]]]
+        }
+      }
+      
+      bt <- function(x) paste0("`", x, "`")
+      
+      if(length(moderator.cols) > 0){
+        dynamic_moderation_terms <- paste0(
+          "i(et, ",
+          bt(dynamic_interaction_cols),
+          ", ref = -1)"
+        )
+        moderation_formula <- stats::as.formula(
+          paste(
+            "y ~ i(et, treated_sa, ref = -1) +",
+            paste(dynamic_moderation_terms, collapse = " + "),
+            "| id^subexp.id + time^subexp.id"
+          )
+        )
+        
+        moderation_model <- feols(
+          data = moderation.data,
+          moderation_formula,
+          cluster = ~id,
+          weights = ~Qsa
+        )
+        
+        if(isTRUE(pooled)){
+          pooled_moderation_terms <- bt(pooled_interaction_cols)
+          pooled_moderation_formula <- stats::as.formula(
+            paste(
+              "y ~ treated_post +",
+              paste(pooled_moderation_terms, collapse = " + "),
+              "| id^subexp.id + time^subexp.id"
+            )
+          )
+          
+          pooled_moderation_model <- feols(
+            data = moderation.data,
+            pooled_moderation_formula,
+            cluster = ~id,
+            weights = ~Qsa
+          )
+        }
+      }
+    }
+  }
   
   refinement.details <- subexp.results %>% 
     purrr::map(function(x){
@@ -210,12 +378,22 @@ cbwsdid <- function(data = data,
     refinement.method = refinement.method,
     covs.formula = covs.formula,
     exact.formula = exact.formula,
+    pooled = pooled,
+    moderation.formula = moderation.formula,
+    moderation.spec = moderation.spec,
+    moderation.reference = moderation_reference,
+    moderation.expanded_cols = moderation_expanded_cols,
+    parallel = parallel,
+    slaves = resolved.slaves,
     refinement.args = refinement.args,
     allow_treated_drop = allow_treated_drop,
     design.weights = subexp.all.weighted$design.weights,
     cohort.weights = subexp.all.weighted$cohort.weights,
     weight.summary = subexp.all.weighted$weight.summary,
-    refinement.details = refinement.details
+    refinement.details = refinement.details,
+    pooled_model = pooled_model,
+    moderation_model = moderation_model,
+    pooled_moderation_model = pooled_moderation_model
   )
   
   return(model)
@@ -521,132 +699,22 @@ subexp.refine <- function(subexp,
   #
   # A bare variable z is interpreted as its value at et = -1.
   # ---------------------------------------------------------------------------
-  split_formula_terms <- function(expr){
-    if(is.null(expr)){
-      return(list())
-    }
-    if(rlang::is_call(expr, "+")){
-      return(c(split_formula_terms(expr[[2]]), split_formula_terms(expr[[3]])))
-    }
-    if(rlang::is_call(expr, "I")){
-      return(split_formula_terms(expr[[2]]))
-    }
-    list(expr)
-  }
-
-  normalize_var_name <- function(var.name){
-    if(is.null(var_aliases) || !length(var_aliases)){
-      return(var.name)
-    }
-    if(var.name %in% names(var_aliases)){
-      return(unname(var_aliases[[var.name]]))
-    }
-    var.name
-  }
-  
-  parse_feature_formula <- function(formula.obj){
-    if(is.null(formula.obj)){
-      return(tibble(source_var = character(),
-                    data_var = character(),
-                    lag_k = integer(),
-                    et_lookup = integer(),
-                    feature_name = character(),
-                    term_type = character()))
-    }
-    
-    rhs <- rlang::f_rhs(formula.obj)
-    raw.terms <- split_formula_terms(rhs)
-    
-    feature.spec <- purrr::map_dfr(raw.terms, function(term){
-      if(is.numeric(term) && length(term) == 1 && term == 1){
-        return(tibble(source_var = character(),
-                      data_var = character(),
-                      lag_k = integer(),
-                      et_lookup = integer(),
-                      feature_name = character(),
-                      term_type = character()))
-      }
-      
-      if(is.symbol(term)){
-        var.name <- as.character(term)
-        data.var <- normalize_var_name(var.name)
-        return(tibble(source_var = var.name,
-                      data_var = data.var,
-                      lag_k = 0L,
-                      et_lookup = -1L,
-                      feature_name = var.name,
-                      term_type = "bare"))
-      }
-      
-      if(rlang::is_call(term, "lag")){
-        var.name <- as.character(term[[2]])
-        data.var <- normalize_var_name(var.name)
-        lag.values <- rlang::eval_bare(term[[3]], env = baseenv()) %>% 
-          as.integer()
-        
-        return(tibble(source_var = var.name,
-                      data_var = data.var,
-                      lag_k = lag.values,
-                      et_lookup = -lag.values,
-                      feature_name = paste0(var.name, "_l", lag.values),
-                      term_type = "lag"))
-      }
-      
-      stop("Unsupported term in formula. Use terms like `lag(y, 1:4)` or bare variables.")
-    })
-    
-    feature.spec %>% 
-      distinct(feature_name, .keep_all = TRUE)
-  }
-  
-  cov.spec <- parse_feature_formula(covs.formula)
-  exact.spec <- parse_feature_formula(exact.formula)
+  cov.spec <- parse_feature_formula_cbwsdid(covs.formula, var_aliases = var_aliases)
+  exact.spec <- parse_feature_formula_cbwsdid(exact.formula, var_aliases = var_aliases)
   all.spec <- bind_rows(cov.spec, exact.spec) %>% 
     distinct(feature_name, .keep_all = TRUE)
   
-  if(any(all.spec$term_type == "lag" & all.spec$lag_k == 0L)){
-    warning(
-      "By including 0 in lag(), you asked refinement to use post-treatment information (et = 0). ",
-      "This is a brutal thing. I do not appreciate it."
-    )
-  }
+  warn_post_treatment_features_cbwsdid(all.spec)
   
   
   # ---------------------------------------------------------------------------
   # 2. Build one-row-per-unit design sample
   # ---------------------------------------------------------------------------
-  design.sample <- subexp %>% 
-    filter(et == -1) %>% 
-    select(id, subexp.id, treated_sa) %>% 
-    distinct()
-  
-  if(nrow(all.spec) > 0){
-    feature.tables <- purrr::map(seq_len(nrow(all.spec)), function(i){
-      spec.i <- all.spec[i, ]
-      
-      tmp <- subexp %>% 
-        filter(et == spec.i$et_lookup) %>% 
-        transmute(id,
-                  subexp.id,
-                  feature_value = .data[[spec.i$data_var]]) %>% 
-        distinct()
-      
-      names(tmp)[names(tmp) == "feature_value"] <- spec.i$feature_name
-      tmp
-    })
-    
-    design.sample <- purrr::reduce(
-      feature.tables,
-      .f = left_join,
-      .init = design.sample,
-      by = c("id", "subexp.id")
-    )
-  }
-  
-  if(nrow(all.spec) > 0){
-    design.sample <- design.sample %>% 
-      filter(stats::complete.cases(across(all_of(all.spec$feature_name))))
-  }
+  design.sample <- build_feature_sample_cbwsdid(
+    subexp = subexp,
+    feature.spec = all.spec,
+    include_treated = TRUE
+  )
   
   empty.design.weights <- design.sample %>% 
     slice(0) %>% 
@@ -1074,4 +1142,178 @@ compute_stack_weights <- function(subexp.all,
     totals = tibble(Nd = Nd, Nc = Nc, Bc = Bc),
     weight.summary = weight.summary
   ))
+}
+
+split_formula_terms_cbwsdid <- function(expr){
+  if(is.null(expr)){
+    return(list())
+  }
+  if(rlang::is_call(expr, "+")){
+    return(c(
+      split_formula_terms_cbwsdid(expr[[2]]),
+      split_formula_terms_cbwsdid(expr[[3]])
+    ))
+  }
+  if(rlang::is_call(expr, "I")){
+    return(split_formula_terms_cbwsdid(expr[[2]]))
+  }
+  list(expr)
+}
+
+normalize_cbwsdid_var_name <- function(var.name, var_aliases = NULL){
+  if(is.null(var_aliases) || !length(var_aliases)){
+    return(var.name)
+  }
+  if(var.name %in% names(var_aliases)){
+    return(unname(var_aliases[[var.name]]))
+  }
+  var.name
+}
+
+parse_feature_formula_cbwsdid <- function(formula.obj, var_aliases = NULL){
+  if(is.null(formula.obj)){
+    return(tibble(
+      source_var = character(),
+      data_var = character(),
+      lag_k = integer(),
+      et_lookup = integer(),
+      feature_name = character(),
+      term_type = character()
+    ))
+  }
+  
+  rhs <- rlang::f_rhs(formula.obj)
+  raw.terms <- split_formula_terms_cbwsdid(rhs)
+  
+  feature.spec <- purrr::map_dfr(raw.terms, function(term){
+    if(is.numeric(term) && length(term) == 1 && term == 1){
+      return(tibble(
+        source_var = character(),
+        data_var = character(),
+        lag_k = integer(),
+        et_lookup = integer(),
+        feature_name = character(),
+        term_type = character()
+      ))
+    }
+    
+    if(is.symbol(term)){
+      var.name <- as.character(term)
+      data.var <- normalize_cbwsdid_var_name(var.name, var_aliases = var_aliases)
+      return(tibble(
+        source_var = var.name,
+        data_var = data.var,
+        lag_k = 0L,
+        et_lookup = -1L,
+        feature_name = var.name,
+        term_type = "bare"
+      ))
+    }
+    
+    if(rlang::is_call(term, "lag")){
+      var.name <- as.character(term[[2]])
+      data.var <- normalize_cbwsdid_var_name(var.name, var_aliases = var_aliases)
+      lag.values <- rlang::eval_bare(term[[3]], env = baseenv()) %>%
+        as.integer()
+      
+      return(tibble(
+        source_var = var.name,
+        data_var = data.var,
+        lag_k = lag.values,
+        et_lookup = -lag.values,
+        feature_name = paste0(var.name, "_l", lag.values),
+        term_type = "lag"
+      ))
+    }
+    
+    stop("Unsupported term in formula. Use terms like `lag(y, 1:4)` or bare variables.")
+  })
+  
+  feature.spec %>%
+    distinct(feature_name, .keep_all = TRUE)
+}
+
+warn_post_treatment_features_cbwsdid <- function(feature.spec){
+  if(any(feature.spec$term_type == "lag" & feature.spec$lag_k == 0L)){
+    warning(
+      "By including 0 in lag(), you asked refinement to use post-treatment information (et = 0). ",
+      "This is a brutal thing. I do not appreciate it."
+    )
+  }
+}
+
+build_feature_sample_cbwsdid <- function(subexp, feature.spec, include_treated = TRUE){
+  if(include_treated){
+    base.sample <- subexp %>%
+      filter(et == -1) %>%
+      select(id, subexp.id, treated_sa) %>%
+      distinct()
+    join.vars <- c("id", "subexp.id")
+  } else {
+    base.sample <- subexp %>%
+      filter(et == -1) %>%
+      select(id, subexp.id) %>%
+      distinct()
+    join.vars <- c("id", "subexp.id")
+  }
+  
+  if(nrow(feature.spec) == 0){
+    return(base.sample)
+  }
+  
+  feature.tables <- purrr::map(seq_len(nrow(feature.spec)), function(i){
+    spec.i <- feature.spec[i, ]
+    
+    tmp <- subexp %>%
+      filter(et == spec.i$et_lookup) %>%
+      transmute(
+        id,
+        subexp.id,
+        feature_value = .data[[spec.i$data_var]]
+      ) %>%
+      distinct()
+    
+    names(tmp)[names(tmp) == "feature_value"] <- spec.i$feature_name
+    tmp
+  })
+  
+  base.sample <- purrr::reduce(
+    feature.tables,
+    .f = left_join,
+    .init = base.sample,
+    by = join.vars
+  )
+  
+  base.sample %>%
+    filter(stats::complete.cases(across(all_of(feature.spec$feature_name))))
+}
+
+expand_moderators_for_model_cbwsdid <- function(data, moderator_cols){
+  expanded_cols <- character()
+  
+  for(col in moderator_cols){
+    x <- data[[col]]
+    
+    if(is.character(x) || is.factor(x)){
+      x <- as.factor(x)
+      
+      if(nlevels(x) <= 1){
+        next
+      }
+      
+      kept.levels <- levels(x)[-1]
+      for(level.i in kept.levels){
+        col.i <- paste0(col, "__", make.names(level.i))
+        data[[col.i]] <- as.integer(x == level.i)
+        expanded_cols <- c(expanded_cols, col.i)
+      }
+    } else {
+      expanded_cols <- c(expanded_cols, col)
+    }
+  }
+  
+  list(
+    data = data,
+    cols = expanded_cols
+  )
 }

@@ -27,6 +27,8 @@ Imports:
     tidyr,
     WeightIt
 Suggests:
+    future,
+    future.apply,
     knitr,
     rmarkdown
 VignetteBuilder: knitr

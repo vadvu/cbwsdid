@@ -16,6 +16,7 @@ utils::globalVariables(
     "n_obs_window",
     "n_support_obs",
     "n_treated",
+    "post",
     "stack_weight",
     "stable_off",
     "stable_on",
@@ -25,6 +26,7 @@ utils::globalVariables(
     "switch01_number",
     "time",
     "treated",
+    "treated_post",
     "treated_episode",
     "treated_sa",
     "weights"

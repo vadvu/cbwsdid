@@ -17,6 +17,10 @@ cbwsdid(
   refinement.method = c("none", "matchit", "weightit"),
   covs.formula = NULL,
   exact.formula = NULL,
+  pooled = TRUE,
+  moderation.formula = NULL,
+  parallel = FALSE,
+  slaves = NULL,
   refinement.args = NULL,
   allow_treated_drop = FALSE
 )
@@ -48,7 +52,15 @@ reverse within the event window.}
 
 \item{covs.formula}{Optional formula describing refinement covariates. For example \code{~ lag(y, 1:4) + lag(x, 1:4)}.}
 
-\item{exact.formula}{Optional formula describing exact matching or exact stratification variables. for example, \code{~ region}.}
+\item{exact.formula}{Optional formula describing exact matching or exact stratification variables. For example, \code{~ region}.}
+
+\item{pooled}{Logical. If \code{TRUE}, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.}
+
+\item{moderation.formula}{Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as \code{covs.formula}, for example \code{~ lag(y, 1)} or \code{~ lag(y, 1) + region}. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.}
+
+\item{parallel}{Logical. If \code{TRUE}, compute primary sub-experiments in parallel.}
+
+\item{slaves}{Optional integer. Number of parallel workers to use when \code{parallel = TRUE}. If \code{NULL}, a conservative default based on available cores is used.}
 
 \item{refinement.args}{Optional named list of arguments passed to the chosen refinement backend. See \code{\link[MatchIt:matchit]{MatchIt::matchit()}} ot \code{\link[WeightIt:weightit]{WeightIt::weightit()}}.}
 
@@ -71,6 +83,12 @@ switch-off episodes with the same pipeline.
 In \code{covs.formula} and \code{exact.formula}, variables can be referenced either by
 the standardized internal names \code{id}, \code{time}, \code{y}, and \code{d}, or by the
 original variable names supplied to the corresponding function arguments.
+
+If \code{moderation.formula} is supplied, the same variable-reference rules apply.
+The listed moderators are treated as pre-treatment characteristics that fully
+modify the treatment effect in additional second-stage regressions. The main
+returned object remains the baseline dynamic event-study model without
+moderation; moderated models are stored in the \code{"cbwsdid"} metadata.
 
 For switch-based designs, \code{post_path} controls the post-treatment path
 restriction on treated episodes. \code{"stable"} requires treated episodes to

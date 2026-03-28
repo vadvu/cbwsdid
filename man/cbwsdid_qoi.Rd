@@ -4,19 +4,30 @@
 \alias{cbwsdid_qoi}
 \title{Quantities of Interest from \code{cbwsdid}}
 \usage{
-cbwsdid_qoi(model, type = c("simple", "dynamic"), post = NULL, level = 0.95)
+cbwsdid_qoi(
+  model,
+  type = c("dynamic", "simple", "pooled"),
+  model_type = c("overall", "moderated"),
+  post = NULL,
+  newdata = NULL,
+  level = 0.95
+)
 }
 \arguments{
 \item{model}{\code{fixest} model object from \code{\link[=cbwsdid]{cbwsdid()}}.}
 
-\item{type}{Character. Quantity of interest to compute. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"dynamic"} returns an event-time table convenient for plotting.}
+\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression, if available.}
+
+\item{model_type}{Character. Which second-stage model to use. \code{"overall"} uses the baseline unmoderated models. \code{"moderated"} uses the moderated second-stage models stored in the metadata.}
 
 \item{post}{Optional. Integer array of non-negative event times to include in the simple ATT aggregation. By default, all available post-treatment event times are used.}
+
+\item{newdata}{Optional data frame describing moderator values for moderated quantities of interest. If \code{NULL}, moderated effects are averaged over the observed moderator distribution used in estimation.}
 
 \item{level}{Confidence level for interval estimates.}
 }
 \value{
-A tibble. For \code{type = "simple"}, one row with the aggregated ATT and confidence interval. For \code{type = "dynamic"}, one row per event time.
+A tibble. For \code{type = "dynamic"}, one row per event time. For \code{type = "simple"} and \code{type = "pooled"}, one row per requested moderator profile.
 }
 \description{
 Extracts aggregated quantities of interest from a fitted \code{\link[=cbwsdid]{cbwsdid()}} model.
@@ -34,5 +45,6 @@ fit <- cbwsdid(
 
 cbwsdid_qoi(fit, type = "simple")
 cbwsdid_qoi(fit, type = "dynamic")
+cbwsdid_qoi(fit, type = "pooled")
 }
 }

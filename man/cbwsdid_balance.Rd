@@ -6,7 +6,7 @@
 \usage{
 cbwsdid_balance(
   model,
-  include_exact = FALSE,
+  include_exact = TRUE,
   which = c("both", "adj", "un"),
   return_cobalt = FALSE
 )
