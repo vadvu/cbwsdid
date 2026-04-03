@@ -16,7 +16,7 @@ cbwsdid_qoi(
 \arguments{
 \item{model}{\code{fixest} model object from \code{\link[=cbwsdid]{cbwsdid()}}.}
 
-\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression, if available.}
+\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression. The difference between \code{"simple"} and \code{"pooled"} is in reference period: in the first it is \code{-1} average, while in the second it is an average of all pre-treatment periods.}
 
 \item{model_type}{Character. Which second-stage model to use. \code{"overall"} uses the baseline unmoderated models. \code{"moderated"} uses the moderated second-stage models stored in the metadata.}
 
