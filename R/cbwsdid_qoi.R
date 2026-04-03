@@ -3,7 +3,7 @@
 #' Extracts aggregated quantities of interest from a fitted [cbwsdid()] model.
 #'
 #' @param model `fixest` model object from [cbwsdid()].
-#' @param type Character. Quantity of interest to compute. `"dynamic"` returns an event-time table convenient for plotting. `"simple"` returns a single post-treatment ATT aggregated across selected event times. `"pooled"` returns the pooled ATT from the additional pooled regression, if available.
+#' @param type Character. Quantity of interest to compute. `"dynamic"` returns an event-time table convenient for plotting. `"simple"` returns a single post-treatment ATT aggregated across selected event times. `"pooled"` returns the pooled ATT from the additional pooled regression. The difference between `"simple"` and `"pooled"` is in reference period: in the first it is `-1` average, while in the second it is an average of all pre-treatment periods.  
 #' @param model_type Character. Which second-stage model to use. `"overall"` uses the baseline unmoderated models. `"moderated"` uses the moderated second-stage models stored in the metadata.
 #' @param post Optional. Integer array of non-negative event times to include in the simple ATT aggregation. By default, all available post-treatment event times are used.
 #' @param newdata Optional data frame describing moderator values for moderated quantities of interest. If `NULL`, moderated effects are averaged over the observed moderator distribution used in estimation.
