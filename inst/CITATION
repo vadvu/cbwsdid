@@ -1,0 +1,17 @@
+citHeader("To cite cbwsdid, please cite the accompanying preprint:")
+
+bibentry(
+  bibtype = "Misc",
+  title = "Covariate-Balanced Weighted Stacked Difference-in-Differences",
+  author = person("Vadim", "Ustyuzhanin"),
+  year = "2026",
+  note = "arXiv preprint",
+  doi = "10.48550/arXiv.2604.02293",
+  url = "https://doi.org/10.48550/arXiv.2604.02293",
+  textVersion = paste(
+    "Ustyuzhanin, V. (2026).",
+    "Covariate-Balanced Weighted Stacked Difference-in-Differences.",
+    "arXiv preprint.",
+    "https://doi.org/10.48550/arXiv.2604.02293"
+  )
+)

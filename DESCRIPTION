@@ -7,7 +7,9 @@ Authors@R:
 Description: Tools for weighted stacked difference-in-differences and
     covariate-balanced weighted stacked difference-in-differences in panel
     data with staggered treatment timing, repeated 0->1 switch-on designs,
-    and repeated 1->0 switch-off designs.
+    and repeated 1->0 switch-off designs. The methodology is described in
+    Ustyuzhanin (2026), "Covariate-Balanced Weighted Stacked
+    Difference-in-Differences" <doi:10.48550/arXiv.2604.02293>.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -32,5 +34,6 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
-URL: https://github.com/vadvu/cbwsdid
+URL: https://github.com/vadvu/cbwsdid,
+    https://doi.org/10.48550/arXiv.2604.02293
 BugReports: https://github.com/vadvu/cbwsdid/issues

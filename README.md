@@ -3,6 +3,12 @@
 `cbwsdid` implements weighted stacked difference-in-differences and
 covariate-balanced weighted stacked DID for panel data.
 
+The methodology implemented in the package is described in my preprint. If you use `cbwsdid`, please cite it:
+
+Ustyuzhanin, Vadim (2026). Covariate-Balanced Weighted Stacked
+Difference-in-Differences. arXiv preprint.
+[https://doi.org/10.48550/arXiv.2604.02293](https://doi.org/10.48550/arXiv.2604.02293)
+
 The package currently supports:
 
 - absorbing staggered adoption designs;

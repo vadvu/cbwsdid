@@ -11,6 +11,7 @@ Package-level documentation and imports for \code{cbwsdid}.
 Useful links:
 \itemize{
   \item \url{https://github.com/vadvu/cbwsdid}
+  \item \doi{10.48550/arXiv.2604.02293}
   \item Report bugs at \url{https://github.com/vadvu/cbwsdid/issues}
 }
 
