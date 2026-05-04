@@ -39,14 +39,40 @@ devtools::install_github("vadvu/cbwsdid")
 ```r
 library(cbwsdid)
 
-fit <- cbwsdid(
+# --- 1. Weighted stacked DiD ----
+
+fit.ws <- cbwsdid(
   data = panel_df, # dataset with id-time as unit of analysis
   y = "y", # dependent variable
   d = "d", # treatment variable
   id = c("unit", "time"),
-  kappa = c(-4, 4),
-  refinement.method = "none"
+  kappa = c(-4, 4), # event-time window
+  refinement.method = "none" # no refinement = Weighted stacked DiD
 )
+
+fit.s <- update(fit.ws, weights = NULL) # to get stacked DiD
+
+# --- 2. Covariate-balanced Weighted stacked DiD ----
+
+fit.cbws <- cbwsdid(
+  data = panel_df,
+  y = "y",
+  d = "d",
+  id = c("unit", "time"),
+  kappa = c(-4, 4),
+  refinement.method = "matchit" # for matching
+  covs.formula = ~ lag(y, 1:3) + lag(x1, 1:3), 
+  refinement.args = list( # arguements for MatchIt
+                      method = "nearest",
+                      distance = "mahalanobis",
+                      ratio = 4,
+                      replace = T
+                    )
+)
+
+model <- attr(fit.cbws, "cbwsdid") # all information about the model
+
+cbwsdid_balance(fit.cbws) # balance statistics by variables in `covs.formula`
 
 cbwsdid_qoi(fit, type = "simple") # for att
 cbwsdid_qoi(fit, type = "dynamic") # for event study estimates 
