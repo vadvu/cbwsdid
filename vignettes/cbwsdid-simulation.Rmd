@@ -1,0 +1,304 @@
+---
+title: "Get started with cbwsdid"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using cbwsdid with the Simulated Panel Data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4
+)
+```
+
+This vignette gives a compact tour of the main `cbwsdid` workflow using the
+simulated dataset shipped with the package. The full dataset contains 500 units
+observed from 2000 to 2012. To keep the vignette light enough, the examples below use a smaller subset.
+
+```{r setup, message = FALSE}
+library(cbwsdid)
+
+data(cbwsdid_sim)
+
+dat <- subset(cbwsdid_sim, id <= 150)
+
+head(dat)
+```
+
+The simulated data have staggered absorbing treatment timing. The treatment year
+is related to observed covariates, and untreated trends also depend on those
+covariates. This makes the dataset useful for comparing unrefined weighted
+stacked DID with covariate-balanced refinements.
+
+## Weighted Stacked DID
+
+Setting `refinement.method = "none"` estimates weighted stacked DID without a
+first-stage matching or weighting refinement. The model returned by `cbwsdid()`
+is a `fixest` object with additional metadata.
+
+```{r weighted-stacked}
+fit_ws <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 2),
+  refinement.method = "none"
+)
+
+fit_ws
+```
+
+
+```{r weighted-metadata}
+
+names(attr(fit_ws, "cbwsdid"))
+```
+
+The same fitted object can be summarized into dynamic, simple, pooled, and
+cohort-level quantities of interest.
+
+```{r weighted-qoi-d}
+cbwsdid_qoi(fit_ws, type = "dynamic")
+```
+
+
+```{r weighted-qoi-s}
+cbwsdid_qoi(fit_ws, type = "simple")
+```
+
+
+```{r weighted-qoi-p}
+cbwsdid_qoi(fit_ws, type = "pooled")
+```
+
+
+```{r weighted-qoi-c}
+cohort_ws <- cbwsdid_qoi(fit_ws, type = "cohort")
+head(cohort_ws$dynamic)
+cohort_ws$simple
+```
+
+Subexperiment diagnostics show which cohorts are used and how many treated and
+control units enter the design.
+
+```{r subexperiments}
+subexp_ws <- cbwsdid_subexperiments(fit_ws)
+```
+
+
+```{r subexperiments-o}
+subexp_ws$overall
+```
+
+
+```{r subexperiments-b}
+subexp_ws$by_subexp
+```
+
+If you want the conventional unweighted stacked DID regression on the same
+stacked sample, you can remove the final stacked weights from the returned
+`fixest` model.
+
+```{r unweighted-stacked}
+fit_unweighted <- update(fit_ws, weights = NULL)
+
+fit_unweighted
+```
+
+
+Since the `cbwsdid()` returns a `fixest` object, one can use such convinient functions as `fixest::iplot` or `fixest::etable`
+
+```{r fixest-ex}
+library(fixest)
+
+iplot(fit_unweighted)
+```
+
+
+
+## Covariate-Balanced Refinement with WeightIt
+
+The `weightit` backend estimates first-stage ATT weights inside each
+subexperiment before the final stacked aggregation weights are applied.
+Covariates can be written in a R formula syntax. A bare covariate is
+read at event time `-1`.
+
+```{r weightit-fit, message = FALSE, warning = FALSE}
+fit_weightit <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  refinement.args = list(method = "glm")
+)
+
+cbwsdid_qoi(fit_weightit, type = "dynamic")
+cbwsdid_qoi(fit_weightit, type = "simple")
+```
+
+Balance diagnostics are computed within subexperiments using the first-stage
+refinement weights.
+
+```{r weightit-balance}
+bal_weightit <- cbwsdid_balance(fit_weightit)
+bal_weightit$overall
+```
+
+## Covariate-Balanced Refinement with MatchIt
+
+The `matchit` backend works similarly, but obtains the first-stage refinement
+weights from matching. The `exact.formula` argument can be used for exact
+matching or exact stratification variables.
+
+```{r matchit-fit, message = FALSE, warning = FALSE}
+fit_matchit <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "matchit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  exact.formula = ~ x2,
+  refinement.args = list(
+    method = "nearest",
+    distance = "mahalanobis",
+    ratio = 3,
+    replace = TRUE
+  )
+)
+
+cbwsdid_qoi(fit_matchit, type = "simple")
+cbwsdid_balance(fit_matchit)$overall
+```
+
+## Moderated Treatment Effects
+
+The `moderation.formula` argument fits additional second-stage models in which
+the treatment effect is interacted with pre-treatment moderators. The baseline
+model remains available, while moderated models are stored in the metadata.
+
+```{r moderation, message = FALSE, warning = FALSE}
+fit_moderated <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  refinement.args = list(method = "glm"),
+  moderation.formula = ~ lag(outcome, 1)
+)
+
+
+model <- attr(fit_moderated, "cbwsdid")
+
+etable(model$pooled_moderation_model)
+
+```
+
+By default, moderated quantities are averaged over the observed moderator
+distribution. You can also request effects at named moderator profiles. The
+lagged moderator created by `lag(outcome, 1)` is named `outcome_l1`.
+
+```{r moderation-newdata}
+profiles <- data.frame(
+  outcome_l1 = c(-1, 1)
+)
+
+cbwsdid_qoi(
+  fit_moderated,
+  type = "pooled",
+  model_type = "moderated",
+  newdata = profiles
+)
+```
+
+## Switch-On Syntax
+
+The package also supports repeated switch designs through `design = "switch01"`
+and `design = "switch10"`. The simulated dataset is absorbing, so each treated
+unit has at most one admissible `0 -> 1` switch and there are no switch-off
+episodes. The switch-on syntax can still be demonstrated on the same data.
+
+```{r switch01}
+fit_switch01 <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  design = "switch01",
+  history.length = 2,
+  first_switch_only = TRUE,
+  refinement.method = "none"
+)
+
+cbwsdid_subexperiments(fit_switch01)$overall
+cbwsdid_qoi(fit_switch01, type = "simple")
+```
+
+For recurrent switch-off designs, use `design = "switch10"` with data that
+contain admissible `1 -> 0` episodes:
+
+```{r switch10-syntax, eval = FALSE}
+fit_switch10 <- cbwsdid(
+  data = recurrent_panel,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  design = "switch10",
+  history.length = 2,
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2)
+)
+```
+
+## Memory and Parallel Options
+
+By default, `cbwsdid()` keeps the stacked estimation sample in the model
+metadata. This is needed for `type = "cohort"`. If memory is a concern and
+cohort-level post-estimation will not be used, set `keep_data = FALSE`.
+
+```{r keep-data}
+fit_light <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "none",
+  keep_data = FALSE
+)
+
+is.null(attr(fit_light, "cbwsdid")$stacked.data)
+```
+
+Large sets of subexperiments can be refined in parallel when the optional
+`future` and `future.apply` packages are installed:
+
+```{r parallel-syntax, eval = FALSE}
+fit_parallel <- cbwsdid(
+  data = cbwsdid_sim,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  refinement.args = list(method = "glm"),
+  parallel = TRUE,
+  slaves = 2
+)
+```

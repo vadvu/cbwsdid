@@ -6,7 +6,7 @@
 \usage{
 cbwsdid_qoi(
   model,
-  type = c("dynamic", "simple", "pooled"),
+  type = c("dynamic", "simple", "pooled", "cohort"),
   model_type = c("overall", "moderated"),
   post = NULL,
   newdata = NULL,
@@ -16,7 +16,7 @@ cbwsdid_qoi(
 \arguments{
 \item{model}{\code{fixest} model object from \code{\link[=cbwsdid]{cbwsdid()}}.}
 
-\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression. The difference between \code{"simple"} and \code{"pooled"} is in reference period: in the first it is \code{-1} average, while in the second it is an average of all pre-treatment periods.}
+\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression. \code{"cohort"} returns cohort- or episode-level dynamic and simple effects. The difference between \code{"simple"} and \code{"pooled"} is in reference period: in the first it is \code{-1} average, while in the second it is an average of all pre-treatment periods.}
 
 \item{model_type}{Character. Which second-stage model to use. \code{"overall"} uses the baseline unmoderated models. \code{"moderated"} uses the moderated second-stage models stored in the metadata.}
 
@@ -27,24 +27,28 @@ cbwsdid_qoi(
 \item{level}{Confidence level for interval estimates.}
 }
 \value{
-A tibble. For \code{type = "dynamic"}, one row per event time. For \code{type = "simple"} and \code{type = "pooled"}, one row per requested moderator profile.
+A tibble. For \code{type = "dynamic"}, one row per event time. For \code{type = "simple"} and \code{type = "pooled"}, one row per requested moderator profile. For \code{type = "cohort"}, a list with \code{dynamic} and \code{simple} tibbles.
 }
 \description{
 Extracts aggregated quantities of interest from a fitted \code{\link[=cbwsdid]{cbwsdid()}} model.
 }
 \examples{
-\dontrun{
+data(cbwsdid_sim)
+cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+
 fit <- cbwsdid(
-  data = panel_df,
-  y = "y",
-  d = "d",
-  id = c("unit", "time"),
-  kappa = c(-4, 4),
+  data = cbwsdid_sim_small,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
   refinement.method = "none"
 )
 
 cbwsdid_qoi(fit, type = "simple")
 cbwsdid_qoi(fit, type = "dynamic")
 cbwsdid_qoi(fit, type = "pooled")
-}
+cohort_qoi <- cbwsdid_qoi(fit, type = "cohort")
+cohort_qoi$dynamic
+cohort_qoi$simple
 }

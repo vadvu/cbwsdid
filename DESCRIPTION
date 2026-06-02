@@ -12,6 +12,7 @@ Description: Tools for weighted stacked difference-in-differences and
     Difference-in-Differences" <doi:10.48550/arXiv.2604.02293>.
 License: MIT + file LICENSE
 Encoding: UTF-8
+LazyData: true
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends: 

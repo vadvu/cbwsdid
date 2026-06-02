@@ -11,18 +11,20 @@
 #' @export
 #'
 #' @examples
-#' \dontrun{
+#' data(cbwsdid_sim)
+#' cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+#'
 #' fit <- cbwsdid(
-#'   data = panel_df,
-#'   y = "y",
-#'   d = "d",
-#'   id = c("unit", "time"),
-#'   kappa = c(-4, 4),
-#'   refinement.method = "none"
+#'   data = cbwsdid_sim_small,
+#'   y = "outcome",
+#'   d = "D",
+#'   id = c("id", "year"),
+#'   kappa = c(-2, 1),
+#'   refinement.method = "none",
+#'   pooled = FALSE
 #' )
 #'
-#' cbwsdid_subexperiments(fit)
-#' }
+#' cbwsdid_subexperiments(fit)$overall
 cbwsdid_subexperiments <- function(model){
   if(!inherits(model, "fixest")){
     stop("`model` must be a fixest object returned by `cbwsdid()`.")
@@ -158,7 +160,13 @@ cbwsdid_subexperiments <- function(model){
       )
   }
   
-  n_candidates <- if(is.null(meta$candidates)) NA_integer_ else nrow(meta$candidates)
+  n_candidates <- if(is.null(meta$candidates)){
+    NA_integer_
+  } else if(is.data.frame(meta$candidates)){
+    nrow(meta$candidates)
+  } else {
+    length(meta$candidates)
+  }
   n_included <- sum(by_subexp$included, na.rm = TRUE)
   n_nonempty_design <- sum((by_subexp$n_treated_raw + by_subexp$n_control_raw) > 0, na.rm = TRUE)
   n_tiny_design <- sum((by_subexp$n_treated_raw + by_subexp$n_control_raw) <= 2 &

@@ -20,16 +20,18 @@ A list with:
 Produces compact summaries of the raw and refined donor pools across subexperiments used in a fitted \code{\link[=cbwsdid]{cbwsdid()}} model.
 }
 \examples{
-\dontrun{
+data(cbwsdid_sim)
+cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+
 fit <- cbwsdid(
-  data = panel_df,
-  y = "y",
-  d = "d",
-  id = c("unit", "time"),
-  kappa = c(-4, 4),
-  refinement.method = "none"
+  data = cbwsdid_sim_small,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
+  refinement.method = "none",
+  pooled = FALSE
 )
 
-cbwsdid_subexperiments(fit)
-}
+cbwsdid_subexperiments(fit)$overall
 }

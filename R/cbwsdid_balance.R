@@ -11,18 +11,22 @@
 #' @export
 #'
 #' @examples
-#' \dontrun{
+#' data(cbwsdid_sim)
+#' cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+#'
 #' fit <- cbwsdid(
-#'   data = panel_df,
-#'   y = "y",
-#'   d = "d",
-#'   id = c("unit", "time"),
-#'   kappa = c(-4, 4),
-#'   refinement.method = "none"
+#'   data = cbwsdid_sim_small,
+#'   y = "outcome",
+#'   d = "D",
+#'   id = c("id", "year"),
+#'   kappa = c(-2, 1),
+#'   refinement.method = "weightit",
+#'   covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+#'   refinement.args = list(method = "glm"),
+#'   pooled = FALSE
 #' )
 #'
-#' cbwsdid_balance(fit)
-#' }
+#' cbwsdid_balance(fit)$overall
 cbwsdid_balance <- function(model,
                             include_exact = TRUE,
                             which = c("both", "adj", "un"),

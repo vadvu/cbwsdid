@@ -18,6 +18,7 @@ cbwsdid(
   covs.formula = NULL,
   exact.formula = NULL,
   pooled = TRUE,
+  keep_data = TRUE,
   moderation.formula = NULL,
   parallel = FALSE,
   slaves = NULL,
@@ -56,6 +57,8 @@ reverse within the event window.}
 
 \item{pooled}{Logical. If \code{TRUE}, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.}
 
+\item{keep_data}{Logical. If \code{TRUE}, store the stacked estimation sample with final weights in the returned model metadata. This is required for cohort-level post-estimation helpers.}
+
 \item{moderation.formula}{Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as \code{covs.formula}, for example \code{~ lag(y, 1)} or \code{~ lag(y, 1) + region}. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.}
 
 \item{parallel}{Logical. If \code{TRUE}, compute primary sub-experiments in parallel.}
@@ -90,6 +93,11 @@ modify the treatment effect in additional second-stage regressions. The main
 returned object remains the baseline dynamic event-study model without
 moderation; moderated models are stored in the \code{"cbwsdid"} metadata.
 
+If \code{keep_data = TRUE}, the \code{"cbwsdid"} metadata stores \code{stacked.data}, the
+stacked estimation sample with event time \code{et}, subexperiment identifier
+\code{subexp.id}, treatment-side indicator \code{treated_sa}, first-stage refinement
+weights \code{bsa}, and final stacked weights \code{Qsa}.
+
 For switch-based designs, \code{post_path} controls the post-treatment path
 restriction on treated episodes. \code{"stable"} requires treated episodes to
 remain treated throughout the event window and therefore targets effects of
@@ -99,14 +107,17 @@ window, so post-treatment coefficients should be interpreted as effects of
 treatment onset averaged over subsequent realized treatment paths.
 }
 \examples{
-\dontrun{
+data(cbwsdid_sim)
+cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+
 fit <- cbwsdid(
-  data = panel_df,
-  y = "y",
-  d = "d",
-  id = c("unit", "time"),
-  kappa = c(-4, 4),
+  data = cbwsdid_sim_small,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 1),
   refinement.method = "none"
 )
-}
+
+cbwsdid_qoi(fit, type = "dynamic")
 }

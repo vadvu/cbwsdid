@@ -22,6 +22,7 @@
 #' @param history.length Only used if design != `"absorbing"`. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.
 #' @param first_switch_only Only used if design != `"absorbing"`. Logical. If `TRUE`, keep only the first admissible switch episode for each unit in switch designs.
 #' @param pooled Logical. If `TRUE`, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.
+#' @param keep_data Logical. If `TRUE`, store the stacked estimation sample with final weights in the returned model metadata. This is required for cohort-level post-estimation helpers.
 #' @param parallel Logical. If `TRUE`, compute primary sub-experiments in parallel.
 #' @param slaves Optional integer. Number of parallel workers to use when `parallel = TRUE`. If `NULL`, a conservative default based on available cores is used.
 #'
@@ -43,6 +44,11 @@
 #' returned object remains the baseline dynamic event-study model without
 #' moderation; moderated models are stored in the `"cbwsdid"` metadata.
 #'
+#' If `keep_data = TRUE`, the `"cbwsdid"` metadata stores `stacked.data`, the
+#' stacked estimation sample with event time `et`, subexperiment identifier
+#' `subexp.id`, treatment-side indicator `treated_sa`, first-stage refinement
+#' weights `bsa`, and final stacked weights `Qsa`.
+#'
 #' For switch-based designs, `post_path` controls the post-treatment path
 #' restriction on treated episodes. `"stable"` requires treated episodes to
 #' remain treated throughout the event window and therefore targets effects of
@@ -55,16 +61,19 @@
 #' @export
 #'
 #' @examples
-#' \dontrun{
+#' data(cbwsdid_sim)
+#' cbwsdid_sim_small <- subset(cbwsdid_sim, id <= 150)
+#'
 #' fit <- cbwsdid(
-#'   data = panel_df,
-#'   y = "y",
-#'   d = "d",
-#'   id = c("unit", "time"),
-#'   kappa = c(-4, 4),
+#'   data = cbwsdid_sim_small,
+#'   y = "outcome",
+#'   d = "D",
+#'   id = c("id", "year"),
+#'   kappa = c(-2, 1),
 #'   refinement.method = "none"
 #' )
-#' }
+#'
+#' cbwsdid_qoi(fit, type = "dynamic")
 
 cbwsdid <- function(data = data, 
                     y = "y", 
@@ -79,6 +88,7 @@ cbwsdid <- function(data = data,
                     covs.formula = NULL,
                     exact.formula = NULL,
                     pooled = TRUE,
+                    keep_data = TRUE,
                     moderation.formula = NULL,
                     parallel = FALSE,
                     slaves = NULL,
@@ -379,6 +389,7 @@ cbwsdid <- function(data = data,
     covs.formula = covs.formula,
     exact.formula = exact.formula,
     pooled = pooled,
+    keep_data = keep_data,
     moderation.formula = moderation.formula,
     moderation.spec = moderation.spec,
     moderation.reference = moderation_reference,
@@ -390,6 +401,7 @@ cbwsdid <- function(data = data,
     design.weights = subexp.all.weighted$design.weights,
     cohort.weights = subexp.all.weighted$cohort.weights,
     weight.summary = subexp.all.weighted$weight.summary,
+    stacked.data = if(isTRUE(keep_data)) subexp.all.data else NULL,
     refinement.details = refinement.details,
     pooled_model = pooled_model,
     moderation_model = moderation_model,
