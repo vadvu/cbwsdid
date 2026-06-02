@@ -1,8 +1,8 @@
 # cbwsdid 0.1.0
 
-# cbwsdid 0.0.3
-
-# cbwsdid 0.0.2
+- New QOI -- cohort
+- Simulated dataset for examples is added
+- Vignette on usage
 
 # cbwsdid 0.0.0.1
 
