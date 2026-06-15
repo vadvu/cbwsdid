@@ -8,7 +8,7 @@
 #' @param id character array. A length-2 character vector giving the unit and time identifiers. For example, `c("id", "time")`
 #' @param kappa Numeric array. A length-2 numeric vector with the event-time window `c(kappa_pre, kappa_post)`. For example, `c(-2, 2)`
 #' @param refinement.method Refinement method. One of `"none"` (for weighted stacked did without refinement), `"matchit"`, or `"weightit"`.
-#' @param covs.formula Optional formula describing refinement covariates. For example `~ lag(y, 1:4) + lag(x, 1:4)`.
+#' @param covs.formula Optional formula describing refinement covariates. For example `~ lag(y, 1:4) + lag(x, 1:4)`. 
 #' @param exact.formula Optional formula describing exact matching or exact stratification variables. For example, `~ region`.
 #' @param moderation.formula Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as `covs.formula`, for example `~ lag(y, 1)` or `~ lag(y, 1) + region`. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.
 #' @param refinement.args Optional named list of arguments passed to the chosen refinement backend. See [MatchIt::matchit()] ot [WeightIt::weightit()]. 
@@ -109,8 +109,16 @@ cbwsdid <- function(data = data,
     c("id", "time", "y", "d"),
     c(id[1], id[2], y, d)
   )
-  
-  db <- data %>% 
+
+  # Covariate/exact/moderation lags deeper than the pre-treatment window cannot be
+  # constructed from within a sub-experiment, so they are clamped to |kappa_pre|.
+  warn_clamped_lags_cbwsdid(
+    formulas = list(covs.formula, exact.formula, moderation.formula),
+    var_aliases = var_aliases,
+    kappa = kappa
+  )
+
+  db <- data %>%
     select(all_of(keep.vars)) %>% 
     rename(id = all_of(id[1]),
            time = all_of(id[2]),
@@ -182,6 +190,7 @@ cbwsdid <- function(data = data,
                                       kappa = kappa)
         subexp.refine(subexp = sub.i,
                       var_aliases = var_aliases,
+                      kappa = kappa,
                       covs.formula = covs.formula,
                       refinement.method = refinement.method,
                       exact.formula = exact.formula,
@@ -225,6 +234,7 @@ cbwsdid <- function(data = data,
         
         subexp.refine(subexp = sub.i,
                       var_aliases = var_aliases,
+                      kappa = kappa,
                       covs.formula = covs.formula,
                       refinement.method = refinement.method,
                       exact.formula = exact.formula,
@@ -273,7 +283,8 @@ cbwsdid <- function(data = data,
   moderation_expanded_cols <- character()
   moderation.spec <- parse_feature_formula_cbwsdid(
     moderation.formula,
-    var_aliases = var_aliases
+    var_aliases = var_aliases,
+    kappa = kappa
   )
   
   if(nrow(moderation.spec) > 0){
@@ -674,6 +685,7 @@ subexp.switch01.construct <- function(db,
 
 subexp.refine <- function(subexp,
                           var_aliases = NULL,
+                          kappa = NULL,
                           covs.formula = NULL,
                           refinement.method = c("none", "matchit", "weightit"),
                           exact.formula = NULL,
@@ -711,8 +723,8 @@ subexp.refine <- function(subexp,
   #
   # A bare variable z is interpreted as its value at et = -1.
   # ---------------------------------------------------------------------------
-  cov.spec <- parse_feature_formula_cbwsdid(covs.formula, var_aliases = var_aliases)
-  exact.spec <- parse_feature_formula_cbwsdid(exact.formula, var_aliases = var_aliases)
+  cov.spec <- parse_feature_formula_cbwsdid(covs.formula, var_aliases = var_aliases, kappa = kappa)
+  exact.spec <- parse_feature_formula_cbwsdid(exact.formula, var_aliases = var_aliases, kappa = kappa)
   all.spec <- bind_rows(cov.spec, exact.spec) %>% 
     distinct(feature_name, .keep_all = TRUE)
   
@@ -1182,7 +1194,7 @@ normalize_cbwsdid_var_name <- function(var.name, var_aliases = NULL){
   var.name
 }
 
-parse_feature_formula_cbwsdid <- function(formula.obj, var_aliases = NULL){
+parse_feature_formula_cbwsdid <- function(formula.obj, var_aliases = NULL, kappa = NULL){
   if(is.null(formula.obj)){
     return(tibble(
       source_var = character(),
@@ -1241,8 +1253,86 @@ parse_feature_formula_cbwsdid <- function(formula.obj, var_aliases = NULL){
     stop("Unsupported term in formula. Use terms like `lag(y, 1:4)` or bare variables.")
   })
   
+  feature.spec <- feature.spec %>%
+    distinct(feature_name, .keep_all = TRUE)
+
+  clamp_feature_lags_cbwsdid(feature.spec, kappa = kappa)
+}
+
+# ---------------------------------------------------------------------------
+# Clamp requested covariate/exact lags to the pre-treatment window.
+#
+# A sub-experiment only contains event times in [kappa_pre, kappa_post], so a
+# lag k can be looked up only if et = -k >= kappa_pre, i.e. k <= |kappa_pre|.
+# Lags deeper than that cannot be constructed from within the sub-experiment.
+# Following the design principle that all information used to refine a
+# sub-experiment must live inside it, such lags are clamped to |kappa_pre|
+# rather than silently dropped. With kappa = NULL no clamping is performed.
+# ---------------------------------------------------------------------------
+clamp_feature_lags_cbwsdid <- function(feature.spec, kappa = NULL){
+  if(is.null(kappa) || nrow(feature.spec) == 0){
+    return(feature.spec)
+  }
+
+  max.lag <- suppressWarnings(as.integer(-kappa[1]))
+  if(length(max.lag) != 1 || is.na(max.lag) || max.lag < 0){
+    return(feature.spec)
+  }
+
+  needs.clamp <- feature.spec$term_type == "lag" & feature.spec$lag_k > max.lag
+
+  if(any(needs.clamp)){
+    feature.spec$lag_k[needs.clamp] <- max.lag
+    feature.spec$et_lookup[needs.clamp] <- -max.lag
+    feature.spec$feature_name[needs.clamp] <- paste0(
+      feature.spec$source_var[needs.clamp], "_l", max.lag
+    )
+  }
+
   feature.spec %>%
     distinct(feature_name, .keep_all = TRUE)
+}
+
+# ---------------------------------------------------------------------------
+# Emit one informative warning (per cbwsdid() call) when any requested lag in
+# the supplied formulas exceeds the pre-treatment window and will be clamped.
+# Detection is done on the *unclamped* specs (kappa = NULL).
+# ---------------------------------------------------------------------------
+warn_clamped_lags_cbwsdid <- function(formulas, var_aliases = NULL, kappa = NULL){
+  if(is.null(kappa)){
+    return(invisible(NULL))
+  }
+
+  max.lag <- suppressWarnings(as.integer(-kappa[1]))
+  if(length(max.lag) != 1 || is.na(max.lag) || max.lag < 0){
+    return(invisible(NULL))
+  }
+
+  specs <- purrr::map_dfr(
+    formulas,
+    function(f) parse_feature_formula_cbwsdid(f, var_aliases = var_aliases, kappa = NULL)
+  )
+
+  if(nrow(specs) == 0){
+    return(invisible(NULL))
+  }
+
+  truncated <- specs %>%
+    dplyr::filter(.data$term_type == "lag", .data$lag_k > max.lag)
+
+  if(nrow(truncated) > 0){
+    bad.terms <- unique(paste0(truncated$source_var, "_l", truncated$lag_k))
+    warning(
+      "Some requested lags exceed the pre-treatment window (|kappa_pre| = ",
+      max.lag, ") and were clamped to lag ", max.lag, ": ",
+      paste(bad.terms, collapse = ", "),
+      ". All information used to refine a sub-experiment must lie within its ",
+      "[kappa_pre, kappa_post] window.",
+      call. = FALSE
+    )
+  }
+
+  invisible(NULL)
 }
 
 warn_post_treatment_features_cbwsdid <- function(feature.spec){

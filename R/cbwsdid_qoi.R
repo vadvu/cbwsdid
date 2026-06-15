@@ -348,35 +348,39 @@ cbwsdid_fit_cohort_model <- function(stacked.data){
     )
   }
   
-  model.data <- stacked.data %>% 
+  model.data <- stacked.data %>%
     dplyr::mutate(subexp.id = as.character(.data$subexp.id))
-  
-  term.map <- model.data %>% 
-    dplyr::distinct(.data$subexp.id, .data$et) %>% 
-    dplyr::filter(.data$et != -1) %>% 
-    dplyr::arrange(.data$subexp.id, .data$et) %>% 
-    dplyr::mutate(term = paste0("cbwsdid_ce_", dplyr::row_number()))
-  
+
+  # One coefficient per treated (subexp.id, et) cell, with et = -1 as the
+  # within-stack reference. The cells are encoded in a single factor column so
+  # that fixest builds the interaction sparsely through i(), instead of
+  # materializing one dense dummy column per cell. The two are algebraically
+  # identical, but the dense version blows up memory for switch designs with
+  # many episode types.
+  cell.sep <- "@@"
+  model.data <- model.data %>%
+    dplyr::mutate(
+      ce_cell = dplyr::if_else(
+        .data$treated_sa == 1 & .data$et != -1,
+        paste0(.data$subexp.id, cell.sep, .data$et),
+        "0"
+      )
+    )
+
+  term.map <- model.data %>%
+    dplyr::filter(.data$treated_sa == 1, .data$et != -1) %>%
+    dplyr::group_by(.data$subexp.id, .data$et) %>%
+    dplyr::summarise(n_treated = dplyr::n_distinct(.data$id), .groups = "drop") %>%
+    dplyr::arrange(.data$subexp.id, .data$et) %>%
+    dplyr::mutate(term = paste0("ce_cell::", .data$subexp.id, cell.sep, .data$et))
+
   if(nrow(term.map) == 0){
     stop("No cohort-event coefficients are available outside the reference period `et = -1`.")
   }
-  
-  for(i in seq_len(nrow(term.map))){
-    model.data[[term.map$term[i]]] <- as.integer(
-      model.data$treated_sa == 1 &
-        model.data$subexp.id == term.map$subexp.id[i] &
-        model.data$et == term.map$et[i]
-    )
-  }
-  
-  rhs <- paste(term.map$term, collapse = " + ")
-  cohort.formula <- stats::as.formula(
-    paste("y ~", rhs, "| id^subexp.id + time^subexp.id")
-  )
-  
+
   cohort.model <- feols(
+    y ~ i(ce_cell, ref = "0") | id^subexp.id + time^subexp.id,
     data = model.data,
-    cohort.formula,
     cluster = ~id,
     weights = ~Qsa
   )
@@ -410,7 +414,10 @@ cbwsdid_qoi_cohort_dynamic <- function(cohort_fit, meta, level = 0.95){
         sqrt(pmax(unname(vcov_all[term_i, term_i]), 0))
       })
     ) %>% 
-    dplyr::left_join(cbwsdid_cohort_info(meta), by = "subexp.id") %>% 
+    dplyr::left_join(
+      cbwsdid_cohort_info(meta) %>% dplyr::select(-dplyr::any_of("n_treated")),
+      by = "subexp.id"
+    ) %>%
     dplyr::mutate(
       conf.low = .data$estimate - crit * .data$std.error,
       conf.high = .data$estimate + crit * .data$std.error,
