@@ -389,6 +389,9 @@ cbwsdid <- function(data = data,
   
   attr(model, "cbwsdid") <- list(
     call = match.call(),
+    y = y,
+    d = d,
+    id = id,
     kappa = kappa,
     design = design,
     treatment_recode = identical(design, "switch10"),
