@@ -4,3 +4,7 @@
 ^LICENSE\.md$
 ^\.github$
 ^Rjournal$
+^CLAUDE\.md$
+^paper$
+^\.claude$
+\.Rcheck$

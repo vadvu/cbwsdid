@@ -1,0 +1,264 @@
+---
+title: "Quantities of interest"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Quantities of interest}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4
+)
+```
+
+This vignette shows how to extract and present quantities of interest from a
+fitted `cbwsdid` model. The same fitted object can be used for dynamic effects,
+simple post-treatment averages, pooled ATT estimates, cohort-level summaries,
+and moderated treatment effects.
+
+```{r setup, message = FALSE}
+library(cbwsdid)
+library(ggplot2)
+
+data(cbwsdid_sim)
+dat <- subset(cbwsdid_sim, id <= 150)
+```
+
+The example below uses covariate-balanced weighting and asks for two
+pre-treatment moderators: the binary baseline covariate `x2` and the
+pre-treatment lagged outcome `lag(outcome, 1)`. The latter is stored under the
+generated name `outcome_l1`.
+
+```{r fit-qoi, message = FALSE, warning = FALSE}
+fit_qoi <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 2),
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  refinement.args = list(method = "glm"),
+  moderation.formula = ~ x2 + lag(outcome, 1)
+)
+
+```
+
+## Overall QOI
+
+`type = "dynamic"` returns event-time effects relative to the omitted reference
+period `et = -1`.
+
+```{r qoi-dynamic}
+cbwsdid_qoi(fit_qoi, type = "dynamic")
+```
+
+`type = "simple"` averages the selected post-treatment event-time effects. By
+default, all available post-treatment periods are used.
+
+```{r qoi-simple}
+cbwsdid_qoi(fit_qoi, type = "simple")
+cbwsdid_qoi(fit_qoi, type = "simple", post = 0:1)
+```
+
+`type = "pooled"` is the equally weighted average of post-treatment dynamic
+effects minus the equally weighted average of pre-treatment placebo effects
+at event times `-2` and earlier. It is therefore a placebo-corrected overall
+effect, while `type = "simple"` is only the post-treatment average. The overall
+pooled QOI is derived from the dynamic model and works even when the model was
+fitted with `pooled = FALSE`.
+
+```{r qoi-pooled}
+cbwsdid_qoi(fit_qoi, type = "pooled")
+```
+
+`type = "cohort"` returns a list with cohort-level dynamic effects and simple
+post-treatment averages. This uses the stacked estimation data stored by
+`keep_data = TRUE`, which is the default.
+
+```{r qoi-cohort}
+cohort_qoi <- cbwsdid_qoi(fit_qoi, type = "cohort")
+
+head(cohort_qoi$dynamic)
+cohort_qoi$simple
+```
+
+Finally, pipeline-bootstrap inference is available for the same quantities.
+Each draw resamples units (the clusters) and re-runs the entire pipeline —
+subexperiment construction, refinement, stacked weighting, and QOI
+aggregation — so the intervals reflect the uncertainty of the first stage as
+well. The same machinery powers `cbwsdid_qoi(..., se.method = "bootstrap")`,
+which returns the usual QOI table with bootstrap standard errors, while
+`se.method = "analytic"` provides influence-function standard errors for
+overall quantities.
+
+```{r qoi-bootstrap}
+boot_qoi <- cbwsdid_bootstrap(fit_qoi,
+                              data = dat,
+                              B = 10, # kept tiny for the example; use B = 999+ in real analyses
+                              qoi = "dynamic")
+boot_qoi
+```
+
+
+## Moderated QOI
+
+When `moderation.formula` is supplied, `cbwsdid()` estimates additional
+second-stage models in which the treatment effect is interacted with the
+specified pre-treatment moderators. These models also include
+moderator-by-event-time main effects, so weighted controls can estimate
+moderator-dependent counterfactual trends. The treatment-by-moderator
+coefficients are therefore DID-in-slopes parameters rather than raw treated
+gradients. The main returned model remains the overall event-study model;
+moderated models are stored in the metadata.
+
+```{r moderated-average}
+cbwsdid_qoi(fit_qoi, type = "dynamic", model_type = "moderated")
+cbwsdid_qoi(fit_qoi, type = "simple", model_type = "moderated")
+```
+
+The default moderated QOI is evaluated at the treated unit-by-stack mean
+moderator profile from the original fit. The raw `treated_sa` coefficients in
+the moderated regression are effects at moderator value zero, so profile-based
+QOIs are usually the safer way to report marginal effects.
+For moderation hypotheses, it is often more useful to evaluate the effect over a
+grid of substantively meaningful moderator values and draw a marginal plot.
+
+```{r marginal-profiles}
+moderator_reference <- attr(fit_qoi, "cbwsdid")$moderation.reference
+
+outcome_grid <- seq(
+  stats::quantile(moderator_reference$outcome_l1, 0.10, na.rm = TRUE),
+  stats::quantile(moderator_reference$outcome_l1, 0.90, na.rm = TRUE),
+  length.out = 25
+)
+
+marginal_profiles <- expand.grid(
+  outcome_l1 = outcome_grid,
+  x2 = c(0, 1)
+)
+
+simple_margins <- cbwsdid_qoi(
+  fit_qoi,
+  type = "simple",
+  model_type = "moderated",
+  newdata = marginal_profiles
+)
+
+simple_margins$x2_label <- factor(
+  simple_margins$x2,
+  levels = c(0, 1),
+  labels = c("x2 = 0", "x2 = 1")
+)
+
+head(simple_margins)
+```
+
+```{r marginal-plot}
+ggplot(
+  simple_margins,
+  aes(x = outcome_l1, y = estimate, color = x2_label, fill = x2_label)
+) +
+  geom_hline(yintercept = 0, linewidth = 0.3) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.25,
+              color = NA) +
+  geom_line(linewidth = 0.6) +
+  labs(
+    x = "Lagged outcome at event time -1",
+    y = "Simple post-treatment ATT",
+    color = NULL,
+    fill = NULL
+  )+
+  theme_bw()
+```
+
+The same idea works for dynamic profiles. Here the effect is evaluated at low
+and high values of the lagged outcome for each value of `x2`.
+
+```{r dynamic-profiles}
+profile_values <- expand.grid(
+  outcome_l1 = stats::quantile(
+    moderator_reference$outcome_l1,
+    c(0.25, 0.75),
+    na.rm = TRUE
+  ),
+  x2 = c(0, 1)
+)
+
+dynamic_profiles <- cbwsdid_qoi(
+  fit_qoi,
+  type = "dynamic",
+  model_type = "moderated",
+  newdata = profile_values
+)
+
+dynamic_profiles$profile_label <- paste0(
+  "x2 = ", dynamic_profiles$x2,
+  ", outcome_l1 = ", round(dynamic_profiles$outcome_l1, 2)
+)
+
+ggplot(dynamic_profiles, aes(x = et, y = estimate, color = profile_label)) +
+  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.3) +
+  geom_vline(xintercept = -0.5, color = "grey75", linetype = "dashed") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.08,
+                alpha = 0.75) +
+  geom_point(size = 1.8) +
+  geom_line(linewidth = 0.4) +
+  scale_x_continuous(breaks = sort(unique(dynamic_profiles$et))) +
+  labs(x = "Event time", y = "ATT", color = NULL)
+```
+
+The event-time path of moderation slopes is available directly. Pre-treatment
+slopes are placebo checks for moderator-dependent untreated trends.
+
+```{r moderation-slopes}
+cbwsdid_qoi_moderation_slopes(fit_qoi)
+```
+
+Pipeline bootstrap inference is also available for moderated QOIs. Moderator
+profiles are resolved once from the original fit and then held fixed across
+bootstrap draws.
+
+```{r moderated-bootstrap}
+cbwsdid_qoi(
+  fit_qoi,
+  type = "dynamic",
+  model_type = "moderated",
+  se.method = "bootstrap",
+  B = 10, # tiny for the example
+  seed = 123
+)
+```
+
+## Regression tables
+
+Since `cbwsdid()` returns `fixest` objects and stores additional `fixest` models
+in the metadata, the usual `fixest::etable()` workflow can be used for
+regression-style tables.
+
+```{r etable-dynamic}
+meta <- attr(fit_qoi, "cbwsdid")
+
+fixest::etable(
+  fit_qoi,
+  meta$moderation_model,
+  keep = "treated"
+)
+```
+
+The standalone pooled overall and pooled moderated regressions stored for
+backward compatibility can be tabulated in the same way. Their coefficients
+need not equal the equal-weighted overall pooled QOI on unbalanced panels.
+
+```{r etable-pooled}
+fixest::etable(
+  meta$pooled_model,
+  meta$pooled_moderation_model,
+  keep = "treated"
+)
+```

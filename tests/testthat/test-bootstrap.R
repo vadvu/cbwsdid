@@ -77,7 +77,7 @@ test_that("bootstrap resampler relabels duplicated units", {
 })
 
 
-test_that("default qoi drops pooled when the original model has no pooled fit", {
+test_that("pooled bootstrap depends on pre-placebo periods, not pooled_model", {
   skip_if_not_installed("fixest")
   data(cbwsdid_sim)
   dat <- subset(cbwsdid_sim, id <= 80)
@@ -113,7 +113,7 @@ test_that("default qoi drops pooled when the original model has no pooled fit", 
       seed = 1,
       progress = FALSE
     ),
-    "does not store a pooled model"
+    "requires at least one pre-treatment period"
   )
 })
 

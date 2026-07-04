@@ -10,7 +10,8 @@
 #' @param refinement.method Refinement method. One of `"none"` (for weighted stacked did without refinement), `"matchit"`, or `"weightit"`.
 #' @param covs.formula Optional formula describing refinement covariates. For example `~ lag(y, 1:4) + lag(x, 1:4)`. 
 #' @param exact.formula Optional formula describing exact matching or exact stratification variables. For example, `~ region`.
-#' @param moderation.formula Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as `covs.formula`, for example `~ lag(y, 1)` or `~ lag(y, 1) + region`. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.
+#' @param moderation.formula Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as `covs.formula`, for example `~ lag(y, 1)` or `~ lag(y, 1) + region`. Moderators enter additional second-stage models through event-time main effects and event-time-by-treatment interactions, so the moderated QOI is read as a marginal treatment effect at a supplied moderator profile.
+#' @param outcome.formula Optional formula describing pre-treatment covariates for the doubly robust outcome model. If supplied, `cbwsdid()` residualizes within-stack outcome changes by regressing untreated changes on these features before fitting the same weighted stacked DID regression. A common choice is to reuse `covs.formula`; for example, `outcome.formula = covs.formula`.
 #' @param refinement.args Optional named list of arguments passed to the chosen refinement backend. See [MatchIt::matchit()] ot [WeightIt::weightit()]. 
 #' @param allow_treated_drop Logical. If `TRUE`, allow the refinement stage to drop treated units or episodes, which changes the estimand to a matched-sample or overlap-trimmed ATT.
 #' @param design Design type. One of `"absorbing"` (staggered adoption), `"switch01"`, or `"switch10"`.
@@ -19,10 +20,18 @@
 #'   throughout the post-treatment window. Under `"relaxed"`, treated episodes
 #'   are defined only by treatment onset at event time zero and may subsequently
 #'   reverse within the event window.
-#' @param history.length Only used if design != `"absorbing"`. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.
+#' @param history.length Only used if design != `"absorbing"`. Length of treatment history used to define admissible switch-on or switch-off episode types. Defaults to `abs(kappa[1])`, so that control treatment paths are pinned down over the whole in-window pre-period, and cannot exceed it. Shorter values leave control treatment paths at event times deeper than `-history.length` unrestricted and trigger a warning.
 #' @param first_switch_only Only used if design != `"absorbing"`. Logical. If `TRUE`, keep only the first admissible switch episode for each unit in switch designs.
-#' @param pooled Logical. If `TRUE`, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.
-#' @param keep_data Logical. If `TRUE`, store the stacked estimation sample with final weights in the returned model metadata. This is required for cohort-level post-estimation helpers.
+#' @param pooled Logical. If `TRUE`, also estimate a standalone pooled ATT
+#'   regression on the same stacked sample and store it for moderated pooled
+#'   effects and backward compatibility. The overall
+#'   `cbwsdid_qoi(type = "pooled")` is computed from the dynamic model and does
+#'   not require this regression.
+#' @param keep_data Logical. If `TRUE` (the default), store both the raw panel
+#'   supplied to `cbwsdid()` and the stacked estimation sample with final
+#'   weights in the returned model metadata. The raw panel is used by
+#'   `cbwsdid_qoi(se.method = "bootstrap")`; the stacked sample is required for
+#'   cohort-level post-estimation helpers.
 #' @param parallel Logical. If `TRUE`, compute primary sub-experiments in parallel.
 #' @param slaves Optional integer. Number of parallel workers to use when `parallel = TRUE`. If `NULL`, a conservative default based on available cores is used.
 #'
@@ -38,16 +47,44 @@
 #' the standardized internal names `id`, `time`, `y`, and `d`, or by the
 #' original variable names supplied to the corresponding function arguments.
 #'
-#' If `moderation.formula` is supplied, the same variable-reference rules apply.
-#' The listed moderators are treated as pre-treatment characteristics that fully
-#' modify the treatment effect in additional second-stage regressions. The main
-#' returned object remains the baseline dynamic event-study model without
-#' moderation; moderated models are stored in the `"cbwsdid"` metadata.
+#' Units with a missing value in any `covs.formula` or `exact.formula` feature
+#' are excluded from the design sample of the affected sub-experiment before
+#' refinement. Excluding a treated unit changes the estimand, so treated
+#' exclusions raise an error unless `allow_treated_drop = TRUE` (then a
+#' warning); control exclusions emit a message. In doubly robust fits, rows
+#' whose `outcome.formula` features (or base-period outcome) are missing cannot
+#' be residualized and enter the second stage with raw outcome changes, with a
+#' warning.
 #'
-#' If `keep_data = TRUE`, the `"cbwsdid"` metadata stores `stacked.data`, the
-#' stacked estimation sample with event time `et`, subexperiment identifier
-#' `subexp.id`, treatment-side indicator `treated_sa`, first-stage refinement
-#' weights `bsa`, and final stacked weights `Qsa`.
+#' If `moderation.formula` is supplied, the same variable-reference rules apply.
+#' The listed moderators are treated as pre-treatment characteristics. In the
+#' moderated dynamic model, each expanded moderator basis column enters as
+#' `i(et, moderator, ref = -1)` and is also interacted with treatment through
+#' `i(et, treated_sa * moderator, ref = -1)`. The moderator main effects let
+#' weighted controls estimate moderator-dependent counterfactual trends; the
+#' treatment interactions identify the difference in those gradients between
+#' treated units and controls. Raw `treated_sa` coefficients in the moderated
+#' model therefore describe the effect at moderator value zero, not the
+#' aggregate dynamic path. Use [cbwsdid_qoi()] with `model_type = "moderated"`
+#' for marginal effects at meaningful profiles and inspect pre-period
+#' moderation slopes as placebo checks.
+#'
+#' If `outcome.formula` is supplied, `cbwsdid()` computes the doubly robust
+#' augmented estimator by fitting linear models of untreated within-stack outcome
+#' changes on pre-treatment covariates, then running the usual weighted stacked
+#' regression on the residualized outcome. The outcome model is a model of
+#' changes, not levels, and its right-hand side must use only pre-treatment
+#' features.
+#'
+#' If `keep_data = TRUE`, the `"cbwsdid"` metadata stores `data`, the raw panel
+#' supplied to `cbwsdid()`, and `stacked.data`, the stacked estimation sample
+#' with event time `et`, subexperiment identifier `subexp.id`, treatment-side
+#' indicator `treated_sa`, first-stage refinement weights `bsa`, and final
+#' stacked weights `Qsa`. For doubly robust fits, `stacked.data$y` is the
+#' residualized outcome used in the second stage and `stacked.data$y_raw`
+#' stores the original outcome. A compact `if_components` table is always
+#' stored, regardless of `keep_data`, for analytic influence-function
+#' inference.
 #'
 #' For switch-based designs, `post_path` controls the post-treatment path
 #' restriction on treated episodes. `"stable"` requires treated episodes to
@@ -90,6 +127,7 @@ cbwsdid <- function(data = data,
                     pooled = TRUE,
                     keep_data = TRUE,
                     moderation.formula = NULL,
+                    outcome.formula = NULL,
                     parallel = FALSE,
                     slaves = NULL,
                     refinement.args = NULL,
@@ -101,7 +139,8 @@ cbwsdid <- function(data = data,
   refinement.vars <- unique(c(
     all.vars(covs.formula),
     all.vars(exact.formula),
-    all.vars(moderation.formula)
+    all.vars(moderation.formula),
+    all.vars(outcome.formula)
   ))
   refinement.source.vars <- setdiff(refinement.vars, c("id", "time", "y", "d"))
   keep.vars <- unique(c(id, y, d, refinement.source.vars))
@@ -113,10 +152,18 @@ cbwsdid <- function(data = data,
   # Covariate/exact/moderation lags deeper than the pre-treatment window cannot be
   # constructed from within a sub-experiment, so they are clamped to |kappa_pre|.
   warn_clamped_lags_cbwsdid(
-    formulas = list(covs.formula, exact.formula, moderation.formula),
+    formulas = list(covs.formula, exact.formula, moderation.formula, outcome.formula),
     var_aliases = var_aliases,
     kappa = kappa
   )
+
+  outcome.spec <- parse_feature_formula_cbwsdid(
+    outcome.formula,
+    var_aliases = var_aliases,
+    kappa = kappa
+  )
+  validate_outcome_features_cbwsdid(outcome.spec)
+  warn_bare_outcome_features_cbwsdid(outcome.spec)
 
   db <- data %>%
     select(all_of(keep.vars)) %>% 
@@ -199,11 +246,40 @@ cbwsdid <- function(data = data,
       }
     )
   } else {
-    if(is.null(history.length) || length(history.length) != 1 || history.length < 1){
-      stop("For `design = \"switch01\"` or `design = \"switch10\"`, `history.length` must be a positive integer.")
+    if(length(kappa) != 2 || anyNA(kappa) || kappa[1] > -1 || kappa[2] < 0){
+      stop(
+        "For `design = \"switch01\"` or `design = \"switch10\"`, `kappa` must be ",
+        "`c(kappa_pre, kappa_post)` with `kappa_pre <= -1` and `kappa_post >= 0`."
+      )
     }
-    
+
+    if(is.null(history.length)){
+      history.length <- abs(kappa[1])
+    }
+
+    if(length(history.length) != 1 || is.na(history.length) || history.length < 1){
+      stop("`history.length` must be a positive integer.")
+    }
+
     history.length <- as.integer(history.length)
+
+    if(history.length > abs(kappa[1])){
+      stop(
+        "`history.length` (", history.length, ") cannot exceed `abs(kappa[1])` (",
+        abs(kappa[1]), "): the matched treatment history must lie inside the event window."
+      )
+    }
+
+    if(history.length < abs(kappa[1])){
+      warning(
+        "`history.length` (", history.length, ") is shorter than `abs(kappa[1])` (",
+        abs(kappa[1]), "). Control episodes are history-matched only over the most recent ",
+        history.length, " period(s), so their treatment paths at event times ",
+        kappa[1], "..", -(history.length + 1L),
+        " are unrestricted and in-window pre-period contrasts can be contaminated ",
+        "by controls' own treatment episodes."
+      )
+    }
     
     candidates <- switch01_candidates(
       db = db,
@@ -255,11 +331,23 @@ cbwsdid <- function(data = data,
   subexp.all.weighted <- compute_stack_weights(subexp.all)
   
   subexp.all.data <- subexp.all.weighted$subexp.weighted
+  outcome.model.summary <- tibble::tibble()
+  if(!is.null(outcome.formula)){
+    outcome.residualized <- cbwsdid_outcome_residualize(
+      subexp.all.data = subexp.all.data,
+      outcome.spec = outcome.spec
+    )
+    subexp.all.data <- outcome.residualized$data
+    outcome.model.summary <- outcome.residualized$summary
+  }
+
   subexp.all.data <- subexp.all.data %>%
     mutate(
       post = as.integer(et >= 0),
       treated_post = treated_sa * post
     )
+
+  if.components <- cbwsdid_build_if_components(subexp.all.data)
   
   model <- feols(data = subexp.all.data, 
                  y ~ i(et, treated_sa, ref = -1) | id^subexp.id + time^subexp.id,
@@ -290,15 +378,32 @@ cbwsdid <- function(data = data,
   if(nrow(moderation.spec) > 0){
     warn_post_treatment_features_cbwsdid(moderation.spec)
     
+    moderation.feature.data <- subexp.all.data
+    if("y_raw" %in% names(moderation.feature.data)){
+      moderation.feature.data <- moderation.feature.data %>%
+        dplyr::mutate(y = .data$y_raw)
+    }
+
     moderation.sample <- build_feature_sample_cbwsdid(
-      subexp = subexp.all.data,
+      subexp = moderation.feature.data,
       feature.spec = moderation.spec,
-      include_treated = FALSE
+      include_treated = TRUE
     )
     
     if(nrow(moderation.sample) > 0){
       moderation_reference <- moderation.sample %>%
+        dplyr::filter(.data$treated_sa == 1) %>%
         dplyr::select(any_of(moderation.spec$feature_name))
+      for(col in moderation.spec$feature_name){
+        if(col %in% names(moderation_reference) &&
+           (is.character(moderation.sample[[col]]) ||
+            is.factor(moderation.sample[[col]]))){
+          moderation_reference[[col]] <- factor(
+            as.character(moderation_reference[[col]]),
+            levels = levels(as.factor(moderation.sample[[col]]))
+          )
+        }
+      }
 
       moderation.join.keys <- moderation.sample %>%
         select(id, subexp.id) %>%
@@ -321,11 +426,14 @@ cbwsdid <- function(data = data,
       
       if(length(moderator.cols) > 0){
         dynamic_interaction_cols <- paste0("treated_x_", moderator.cols)
+        pooled_main_cols <- paste0("post_x_", moderator.cols)
         pooled_interaction_cols <- paste0("treated_post_x_", moderator.cols)
         
         for(i in seq_along(moderator.cols)){
           moderation.data[[dynamic_interaction_cols[i]]] <-
             moderation.data$treated_sa * moderation.data[[moderator.cols[i]]]
+          moderation.data[[pooled_main_cols[i]]] <-
+            moderation.data$post * moderation.data[[moderator.cols[i]]]
           moderation.data[[pooled_interaction_cols[i]]] <-
             moderation.data$treated_post * moderation.data[[moderator.cols[i]]]
         }
@@ -334,6 +442,11 @@ cbwsdid <- function(data = data,
       bt <- function(x) paste0("`", x, "`")
       
       if(length(moderator.cols) > 0){
+        dynamic_main_terms <- paste0(
+          "i(et, ",
+          bt(moderator.cols),
+          ", ref = -1)"
+        )
         dynamic_moderation_terms <- paste0(
           "i(et, ",
           bt(dynamic_interaction_cols),
@@ -342,6 +455,8 @@ cbwsdid <- function(data = data,
         moderation_formula <- stats::as.formula(
           paste(
             "y ~ i(et, treated_sa, ref = -1) +",
+            paste(dynamic_main_terms, collapse = " + "),
+            "+",
             paste(dynamic_moderation_terms, collapse = " + "),
             "| id^subexp.id + time^subexp.id"
           )
@@ -355,10 +470,13 @@ cbwsdid <- function(data = data,
         )
         
         if(isTRUE(pooled)){
+          pooled_main_terms <- bt(pooled_main_cols)
           pooled_moderation_terms <- bt(pooled_interaction_cols)
           pooled_moderation_formula <- stats::as.formula(
             paste(
               "y ~ treated_post +",
+              paste(pooled_main_terms, collapse = " + "),
+              "+",
               paste(pooled_moderation_terms, collapse = " + "),
               "| id^subexp.id + time^subexp.id"
             )
@@ -405,6 +523,10 @@ cbwsdid <- function(data = data,
     pooled = pooled,
     keep_data = keep_data,
     moderation.formula = moderation.formula,
+    outcome.formula = outcome.formula,
+    dr = !is.null(outcome.formula),
+    outcome.spec = outcome.spec,
+    outcome.model.summary = outcome.model.summary,
     moderation.spec = moderation.spec,
     moderation.reference = moderation_reference,
     moderation.expanded_cols = moderation_expanded_cols,
@@ -415,7 +537,9 @@ cbwsdid <- function(data = data,
     design.weights = subexp.all.weighted$design.weights,
     cohort.weights = subexp.all.weighted$cohort.weights,
     weight.summary = subexp.all.weighted$weight.summary,
+    data = if(isTRUE(keep_data)) data else NULL,
     stacked.data = if(isTRUE(keep_data)) subexp.all.data else NULL,
+    if_components = if.components,
     refinement.details = refinement.details,
     pooled_model = pooled_model,
     moderation_model = moderation_model,
@@ -742,8 +866,54 @@ subexp.refine <- function(subexp,
     feature.spec = all.spec,
     include_treated = TRUE
   )
-  
-  empty.design.weights <- design.sample %>% 
+
+  # build_feature_sample_cbwsdid() keeps complete cases only, so units with a
+  # missing refinement feature vanish before any backend runs; treated losses
+  # change the estimand and must pass the same `allow_treated_drop` gate as
+  # every other drop path.
+  base.roster <- subexp %>%
+    filter(et == -1) %>%
+    distinct(id, treated_sa)
+
+  na.dropped.treated <- setdiff(
+    base.roster$id[base.roster$treated_sa == 1],
+    design.sample$id[design.sample$treated_sa == 1]
+  )
+  na.dropped.control <- setdiff(
+    base.roster$id[base.roster$treated_sa == 0],
+    design.sample$id[design.sample$treated_sa == 0]
+  )
+  subexp.label <- as.character(subexp$subexp.id[1])
+
+  if(length(na.dropped.treated) > 0 && !allow_treated_drop){
+    stop(
+      "Refinement features are missing (NA) for ", length(na.dropped.treated),
+      " treated unit(s) in sub-experiment ", subexp.label, " (e.g. ",
+      paste(utils::head(na.dropped.treated, 5), collapse = ", "),
+      "). Dropping them changes the estimand away from the full treated-cohort ATT. ",
+      "Impute or remove the offending covariates, or set `allow_treated_drop = TRUE` ",
+      "to accept a complete-cases ATT."
+    )
+  }
+
+  if(length(na.dropped.treated) > 0 && allow_treated_drop){
+    warning(
+      "Dropped ", length(na.dropped.treated),
+      " treated unit(s) with missing refinement features in sub-experiment ",
+      subexp.label,
+      ". The resulting estimand is no longer the full treated-cohort ATT."
+    )
+  }
+
+  if(length(na.dropped.control) > 0){
+    message(
+      "Dropped ", length(na.dropped.control),
+      " control unit(s) with missing refinement features in sub-experiment ",
+      subexp.label, "."
+    )
+  }
+
+  empty.design.weights <- design.sample %>%
     slice(0) %>% 
     transmute(id, subexp.id, treated_sa, bsa = numeric())
   
@@ -1145,7 +1315,7 @@ compute_stack_weights <- function(subexp.all,
   # 4. Merge weights back to every stacked row
   # ---------------------------------------------------------------------------
   subexp.weighted <- subexp.all %>% 
-    select(-any_of(c("stack_weight", "Qsa"))) %>% 
+    select(-any_of(c(b_var, "bsa", "stack_weight", "Qsa"))) %>%
     left_join(
       design.weights %>% 
         select(id, subexp.id, treated_sa, bsa, stack_weight),
@@ -1169,6 +1339,44 @@ compute_stack_weights <- function(subexp.all,
     totals = tibble(Nd = Nd, Nc = Nc, Bc = Bc),
     weight.summary = weight.summary
   ))
+}
+
+cbwsdid_build_if_components <- function(stacked.data){
+  required.cols <- c("id", "subexp.id", "et", "treated_sa", "bsa", "y")
+  missing.cols <- setdiff(required.cols, names(stacked.data))
+  if(length(missing.cols) > 0L){
+    stop(
+      "Cannot build analytic-variance components because the stacked sample ",
+      "is missing: ",
+      paste(missing.cols, collapse = ", "),
+      "."
+    )
+  }
+
+  if.data <- stacked.data
+  if(!"y_raw" %in% names(if.data)){
+    if.data$y_raw <- if.data$y
+  }
+
+  base.outcome <- if.data %>%
+    dplyr::filter(.data$et == -1) %>%
+    dplyr::transmute(
+      id = .data$id,
+      subexp.id = .data$subexp.id,
+      y_base_raw = .data$y_raw
+    ) %>%
+    dplyr::distinct()
+
+  if.data %>%
+    dplyr::left_join(base.outcome, by = c("id", "subexp.id")) %>%
+    dplyr::transmute(
+      id = .data$id,
+      subexp.id = .data$subexp.id,
+      et = .data$et,
+      treated_sa = .data$treated_sa,
+      b = dplyr::if_else(.data$treated_sa == 1, 1, .data$bsa),
+      R = .data$y - .data$y_base_raw
+    )
 }
 
 split_formula_terms_cbwsdid <- function(expr){
@@ -1345,6 +1553,254 @@ warn_post_treatment_features_cbwsdid <- function(feature.spec){
       "This is a brutal thing. I do not appreciate it."
     )
   }
+}
+
+validate_outcome_features_cbwsdid <- function(outcome.spec){
+  if(nrow(outcome.spec) == 0){
+    return(invisible(NULL))
+  }
+
+  post.features <- outcome.spec %>%
+    dplyr::filter(.data$et_lookup >= 0)
+
+  if(nrow(post.features) > 0){
+    stop(
+      "`outcome.formula` must use only pre-treatment features. ",
+      "The following feature(s) look up event time 0 or later: ",
+      paste(unique(post.features$feature_name), collapse = ", "),
+      "."
+    )
+  }
+
+  invisible(NULL)
+}
+
+warn_bare_outcome_features_cbwsdid <- function(outcome.spec){
+  if(nrow(outcome.spec) == 0){
+    return(invisible(NULL))
+  }
+  bare <- unique(outcome.spec$feature_name[outcome.spec$term_type == "bare"])
+  if(length(bare) > 0){
+    warning(
+      "`outcome.formula` uses undated covariate(s) ",
+      paste(bare, collapse = ", "),
+      "; each is read at the base period (event time -1). If a covariate is ",
+      "time-varying, date it explicitly with lag() (e.g. `lag(", bare[1],
+      ", 1)`) so the trend model uses a pre-treatment value, not a contemporaneous one.",
+      call. = FALSE
+    )
+  }
+  invisible(NULL)
+}
+
+cbwsdid_outcome_residualize <- function(subexp.all.data, outcome.spec){
+  out <- subexp.all.data
+  out$y_raw <- out$y
+  out$.dr_row_id <- seq_len(nrow(out))
+
+  feature.cols <- outcome.spec$feature_name
+  subexp.ids <- unique(out$subexp.id)
+  summaries <- list()
+  n.unresidualized <- 0L
+  unresidualized.ids <- character()
+
+  for(subexp.i in subexp.ids){
+    subexp.data <- out[out$subexp.id == subexp.i, , drop = FALSE]
+    feature.sample <- build_feature_sample_cbwsdid(
+      subexp = subexp.data,
+      feature.spec = outcome.spec,
+      include_treated = TRUE
+    )
+
+    base.y <- subexp.data %>%
+      dplyr::filter(.data$et == -1) %>%
+      dplyr::transmute(
+        id = .data$id,
+        subexp.id = .data$subexp.id,
+        y_base = .data$y_raw
+      )
+
+    event.times <- sort(unique(subexp.data$et[subexp.data$et != -1]))
+
+    for(et.i in event.times){
+      cell <- subexp.data %>%
+        dplyr::filter(.data$et == et.i) %>%
+        # A bare feature carries its source variable's name (e.g. `x1`), which also
+        # exists as a raw column in `subexp.data`; drop those raw columns so the
+        # base-period (et = -1) values materialized in `feature.sample` join in
+        # cleanly instead of colliding into `.x`/`.y`. Lag features have derived
+        # names (e.g. `x1_l1`) that are absent here, so `any_of` leaves them alone.
+        dplyr::select(-dplyr::any_of(feature.cols)) %>%
+        dplyr::left_join(base.y, by = c("id", "subexp.id")) %>%
+        dplyr::left_join(feature.sample, by = c("id", "subexp.id", "treated_sa")) %>%
+        dplyr::mutate(delta_y = .data$y_raw - .data$y_base)
+
+      complete.features <- if(length(feature.cols) == 0L){
+        rep(TRUE, nrow(cell))
+      } else {
+        stats::complete.cases(cell[, feature.cols, drop = FALSE])
+      }
+      complete.rows <- complete.features & !is.na(cell$delta_y)
+      controls <- cell[cell$treated_sa == 0 & complete.rows, , drop = FALSE]
+      feature.cols.use <- cbwsdid_screen_outcome_features(
+        data = controls,
+        feature.cols = feature.cols
+      )
+
+      cell.summary <- cbwsdid_fit_outcome_cell(
+        controls = controls,
+        prediction.data = cell[complete.rows, , drop = FALSE],
+        feature.cols = feature.cols.use
+      )
+
+      if(identical(cell.summary$status, "fit")){
+        pred.rows <- cell.summary$prediction$.dr_row_id
+        pred.idx <- match(pred.rows, out$.dr_row_id)
+        out$y[pred.idx] <- out$y_raw[pred.idx] - cell.summary$prediction$mu_hat
+
+        skipped.rows <- cell[!complete.rows, , drop = FALSE]
+        n.unresidualized <- n.unresidualized + nrow(skipped.rows)
+        unresidualized.ids <- union(unresidualized.ids, as.character(skipped.rows$id))
+      }
+
+      summaries[[length(summaries) + 1L]] <- tibble::tibble(
+        subexp.id = subexp.i,
+        et = et.i,
+        status = cell.summary$status,
+        reason = cell.summary$reason,
+        n_control = nrow(controls),
+        n_predict = nrow(cell.summary$prediction),
+        outcome_terms = paste(feature.cols.use, collapse = ", "),
+        coefficients = list(cell.summary$coefficients)
+      )
+    }
+  }
+
+  summary <- dplyr::bind_rows(summaries)
+  n.skipped <- sum(summary$status != "fit")
+  if(n.skipped > 0L){
+    warning(
+      "Outcome-model augmentation was skipped for ",
+      n.skipped,
+      " stack/event-time cell(s); those cells fall back to the weighting-only contrast.",
+      call. = FALSE
+    )
+  }
+
+  if(n.unresidualized > 0L){
+    warning(
+      "Doubly robust augmentation left ", n.unresidualized, " row(s) from ",
+      length(unresidualized.ids), " unit(s) unresidualized because outcome-model ",
+      "features or the base-period outcome are missing; those rows enter the ",
+      "second stage with raw outcome changes.",
+      call. = FALSE
+    )
+  }
+
+  out$.dr_row_id <- NULL
+
+  list(
+    data = out,
+    summary = summary
+  )
+}
+
+cbwsdid_screen_outcome_features <- function(data, feature.cols){
+  if(length(feature.cols) == 0L || nrow(data) == 0L){
+    return(character())
+  }
+
+  varying.cols <- feature.cols[purrr::map_lgl(feature.cols, function(v){
+    x <- data[[v]]
+    x <- x[!is.na(x)]
+    dplyr::n_distinct(x) > 1
+  })]
+
+  if(length(varying.cols) > 1L &&
+     all(purrr::map_lgl(data[varying.cols], is.numeric))){
+    X <- as.matrix(data[varying.cols])
+    qr.X <- qr(X)
+    max.rank <- min(qr.X$rank, nrow(X) - 1L)
+
+    if(max.rank <= 0L){
+      return(character())
+    }
+
+    varying.cols <- varying.cols[qr.X$pivot[seq_len(max.rank)]]
+  }
+
+  varying.cols
+}
+
+cbwsdid_fit_outcome_cell <- function(controls,
+                                     prediction.data,
+                                     feature.cols){
+  empty.prediction <- tibble::tibble(.dr_row_id = integer(), mu_hat = numeric())
+  empty.coef <- tibble::tibble(term = character(), estimate = numeric())
+
+  if(nrow(controls) == 0L || nrow(prediction.data) == 0L){
+    return(list(
+      status = "fallback",
+      reason = "no complete controls or prediction rows",
+      prediction = empty.prediction,
+      coefficients = empty.coef
+    ))
+  }
+
+  bt <- function(x) paste0("`", x, "`")
+  rhs <- if(length(feature.cols) == 0L) "1" else paste(bt(feature.cols), collapse = " + ")
+  outcome.formula <- stats::as.formula(paste("delta_y ~", rhs))
+
+  model.matrix.control <- try(
+    stats::model.matrix(outcome.formula, data = controls),
+    silent = TRUE
+  )
+  if(inherits(model.matrix.control, "try-error") ||
+     nrow(model.matrix.control) <= ncol(model.matrix.control) ||
+     qr(model.matrix.control)$rank < ncol(model.matrix.control)){
+    return(list(
+      status = "fallback",
+      reason = "rank deficient or too few controls",
+      prediction = empty.prediction,
+      coefficients = empty.coef
+    ))
+  }
+
+  fit <- try(stats::lm(outcome.formula, data = controls), silent = TRUE)
+  if(inherits(fit, "try-error")){
+    return(list(
+      status = "fallback",
+      reason = "lm failed",
+      prediction = empty.prediction,
+      coefficients = empty.coef
+    ))
+  }
+
+  mu.hat <- try(
+    stats::predict(fit, newdata = prediction.data),
+    silent = TRUE
+  )
+  if(inherits(mu.hat, "try-error") || anyNA(mu.hat)){
+    return(list(
+      status = "fallback",
+      reason = "prediction failed",
+      prediction = empty.prediction,
+      coefficients = empty.coef
+    ))
+  }
+
+  list(
+    status = "fit",
+    reason = NA_character_,
+    prediction = tibble::tibble(
+      .dr_row_id = prediction.data$.dr_row_id,
+      mu_hat = unname(mu.hat)
+    ),
+    coefficients = tibble::tibble(
+      term = names(stats::coef(fit)),
+      estimate = unname(stats::coef(fit))
+    )
+  )
 }
 
 build_feature_sample_cbwsdid <- function(subexp, feature.spec, include_treated = TRUE){

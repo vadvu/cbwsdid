@@ -10,27 +10,94 @@ cbwsdid_qoi(
   model_type = c("overall", "moderated"),
   post = NULL,
   newdata = NULL,
-  level = 0.95
+  level = 0.95,
+  se.method = c("conditional", "analytic", "bootstrap"),
+  data = NULL,
+  B = 999L,
+  seed = NULL,
+  parallel = FALSE,
+  workers = NULL
 )
 }
 \arguments{
 \item{model}{\code{fixest} model object from \code{\link[=cbwsdid]{cbwsdid()}}.}
 
-\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns an event-time table convenient for plotting. \code{"simple"} returns a single post-treatment ATT aggregated across selected event times. \code{"pooled"} returns the pooled ATT from the additional pooled regression. \code{"cohort"} returns cohort- or episode-level dynamic and simple effects. The difference between \code{"simple"} and \code{"pooled"} is in reference period: in the first it is \code{-1} average, while in the second it is an average of all pre-treatment periods.}
+\item{type}{Character. Quantity of interest to compute. \code{"dynamic"} returns
+an event-time table convenient for plotting. \code{"simple"} returns the
+equally weighted post-treatment average. \code{"pooled"} returns the
+placebo-corrected overall effect: the equally weighted post-treatment
+average minus the equally weighted pre-treatment placebo average over
+event times at or before \code{-2}. \code{"cohort"} returns cohort- or episode-level
+dynamic and simple effects.}
 
 \item{model_type}{Character. Which second-stage model to use. \code{"overall"} uses the baseline unmoderated models. \code{"moderated"} uses the moderated second-stage models stored in the metadata.}
 
 \item{post}{Optional. Integer array of non-negative event times to include in the simple ATT aggregation. By default, all available post-treatment event times are used.}
 
-\item{newdata}{Optional data frame describing moderator values for moderated quantities of interest. If \code{NULL}, moderated effects are averaged over the observed moderator distribution used in estimation.}
+\item{newdata}{Optional data frame describing moderator values for moderated quantities of interest. If \code{NULL}, moderated effects are evaluated at the treated unit-by-stack mean moderator profile from the original fit.}
 
 \item{level}{Confidence level for interval estimates.}
+
+\item{se.method}{Standard-error method. \code{"conditional"} (the default) uses
+the cluster-robust covariance matrix from the fitted second-stage
+regression. \code{"analytic"} uses the unit-clustered influence function.
+\code{"bootstrap"} reruns the full estimation pipeline through
+\code{\link[=cbwsdid_bootstrap]{cbwsdid_bootstrap()}}.}
+
+\item{data}{Optional raw panel used only for \code{se.method = "bootstrap"}. By
+default, it is taken from the fitted model when \code{\link[=cbwsdid]{cbwsdid()}} was called with
+\code{keep_data = TRUE}.}
+
+\item{B}{Number of pipeline-bootstrap replications.}
+
+\item{seed}{Optional bootstrap random seed.}
+
+\item{parallel}{Logical. If \code{TRUE}, run bootstrap replications in parallel.}
+
+\item{workers}{Optional number of bootstrap workers.}
 }
 \value{
 A tibble. For \code{type = "dynamic"}, one row per event time. For \code{type = "simple"} and \code{type = "pooled"}, one row per requested moderator profile. For \code{type = "cohort"}, a list with \code{dynamic} and \code{simple} tibbles.
 }
 \description{
 Extracts aggregated quantities of interest from a fitted \code{\link[=cbwsdid]{cbwsdid()}} model.
+}
+\details{
+Analytic inference clusters influence-function contributions by unit and
+stores the full event-time covariance matrix in the \code{"vcov"} attribute of
+the returned tibble. For smooth weighting without an outcome model, it
+treats estimated balancing weights as fixed; the pipeline bootstrap also
+captures weight re-estimation.
+
+For \code{model_type = "overall"}, the pooled estimate and all three uncertainty
+methods use the same linear functional of the dynamic coefficients:
+the equally weighted post-treatment average minus the equally weighted
+pre-treatment placebo average over event times at or before \code{-2}. Thus the
+overall pooled quantity does not require \code{pooled = TRUE}. Moderated pooled
+effects continue to use the separately fitted pooled moderation model.
+
+Moderated QOIs are marginal effects
+\verb{theta_e(m) = beta_e + psi_e' m}, where \code{m} is an expanded moderator profile.
+The moderated second-stage model includes both moderator-by-event-time main
+effects and treatment-by-moderator-by-event-time interactions. The main
+effects capture moderator-dependent counterfactual trends and are not part of
+the treatment-effect profile combo. The \code{beta_e} coefficients are effects at
+moderator value zero; use \code{newdata} profiles, the default treated-profile
+mean, or \code{\link[=cbwsdid_qoi_moderation_slopes]{cbwsdid_qoi_moderation_slopes()}} rather than reading them as
+aggregate effects.
+
+For moderated bootstrap QOIs, moderator profiles are resolved once from the
+original model and then frozen across bootstrap draws. With explicit
+\code{newdata}, this is the requested fixed evaluation point. With the default
+profile, the bootstrap targets the effect at the original treated mean
+profile rather than re-estimating a new mean profile in each draw.
+
+For doubly robust nearest-neighbour matching, the analytic variance is
+conditional on the realized matches because the Abadie--Imbens fixed-match
+count term is not yet included. For pure matching without an outcome model,
+\code{se.method = "analytic"} warns and falls back to the existing conditional
+variance. Analytic inference is available for overall and cohort quantities.
+For moderated QOIs, use conditional or bootstrap inference.
 }
 \examples{
 data(cbwsdid_sim)

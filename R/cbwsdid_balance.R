@@ -1,6 +1,6 @@
 #' Balance Diagnostics for `cbwsdid`
 #'
-#' Computes standardized mean difference tables for the refinement covariates used in [cbwsdid()]. Diagnostics are computed within subexperiments using the first-stage refinement weights rather than the final stacked weights.
+#' Computes standardized mean difference tables for the refinement covariates used in [cbwsdid()]. Diagnostics are computed within subexperiments using the first-stage refinement weights rather than the final stacked weights. `Diff.Un` is computed on the full design sample, including units that refinement later discarded (e.g. unmatched controls), so it measures pre-refinement balance; `Diff.Adj` weights units by the first-stage refinement weights.
 #'
 #' @param model `fixest` model object returned by [cbwsdid()].
 #' @param include_exact Logical. If `TRUE`, include variables from `exact.formula` in the balance output.
@@ -122,12 +122,15 @@ cbwsdid_balance <- function(model,
       return(empty_out)
     }
     
+    # Keep the full design sample: units discarded by refinement (e.g.
+    # unmatched controls) enter with zero weight, so Diff.Un reflects the
+    # pre-refinement sample while Diff.Adj uses only refined mass.
     bal.data <- dplyr::left_join(
       design.sample,
       design.weights,
       by = c("id", "subexp.id", "treated_sa")
-    ) %>% 
-      dplyr::filter(!is.na(.data$bsa))
+    ) %>%
+      dplyr::mutate(bsa = dplyr::coalesce(.data$bsa, 0))
     
     if(nrow(bal.data) == 0 ||
        sum(bal.data$treated_sa == 1) == 0 ||
@@ -135,7 +138,7 @@ cbwsdid_balance <- function(model,
       return(empty_out)
     }
 
-    n_treated_refined <- sum(bal.data$treated_sa == 1)
+    n_treated_refined <- sum(bal.data$treated_sa == 1 & bal.data$bsa > 0)
     
     control.weights <- bal.data$bsa[bal.data$treated_sa == 0]
     tol <- sqrt(.Machine$double.eps)

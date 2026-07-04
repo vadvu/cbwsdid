@@ -11,6 +11,8 @@ cbwsdid_bootstrap(
   cluster = NULL,
   qoi = c("dynamic", "simple", "pooled"),
   post = NULL,
+  model_type = c("overall", "moderated"),
+  newdata = NULL,
   ci_type = c("percentile", "normal"),
   level = 0.95,
   parallel = FALSE,
@@ -35,6 +37,13 @@ values are \code{"dynamic"}, \code{"simple"}, and \code{"pooled"}.}
 \item{post}{Optional integer vector of event times passed to
 \code{cbwsdid_qoi(type = "simple")}.}
 
+\item{model_type}{Character. \code{"overall"} bootstraps the baseline QOIs.
+\code{"moderated"} bootstraps moderated QOIs at fixed moderator profiles.}
+
+\item{newdata}{Optional data frame of moderator profiles used only when
+\code{model_type = "moderated"}. If \code{NULL}, the treated mean profile from the
+original model is frozen across bootstrap draws.}
+
 \item{ci_type}{Confidence interval type. \code{"percentile"} uses bootstrap
 quantiles; \code{"normal"} uses the original estimate plus or minus a normal
 critical value times the bootstrap standard error.}
@@ -58,14 +67,27 @@ An object of class \code{"cbwsdid_bootstrap"}, a list with \code{summary},
 }
 \description{
 Re-runs the full \code{\link[=cbwsdid]{cbwsdid()}} pipeline on cluster bootstrap samples and
-summarizes bootstrap uncertainty for overall quantities of interest.
+summarizes bootstrap uncertainty for overall or moderated quantities of
+interest.
 }
 \details{
 This is a pipeline bootstrap: each replication rebuilds sub-experiments,
 re-estimates refinement weights, recomputes stacked weights, refits the
 second-stage model, and then extracts the requested overall quantity of
-interest. The original \code{model} is used only to recover estimation arguments
-and point estimates.
+interest. The original \code{model} is used to recover estimation arguments,
+point estimates, and, for moderated QOIs, fixed moderator profiles.
+
+The pooled quantity is recomputed in every replication as the equally
+weighted post-treatment dynamic average minus the equally weighted
+pre-treatment placebo average. It does not use the standalone
+\code{treated_post} regression. For moderated QOIs, dynamic and simple
+quantities are fixed linear combinations of the moderated dynamic model,
+while \code{qoi = "pooled"} uses the standalone pooled moderated model and
+therefore requires \code{pooled = TRUE} in the original fit.
+
+Moderated bootstrap profiles are resolved once from the original model and
+kept fixed in every draw. This propagates uncertainty in the effect at those
+evaluation points, not uncertainty in a re-estimated average profile.
 
 Duplicated clusters are relabelled with fresh unit identifiers before each
 refit. This is required so that fixed effects and stacked-treatment logic

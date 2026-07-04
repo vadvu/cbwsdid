@@ -10,3 +10,8 @@ inst/doc
 .httr-oauth
 .quarto
 Rjournal/
+*.Rcheck/
+.claude/
+CLAUDE.md
+paper/
+Rplots.pdf

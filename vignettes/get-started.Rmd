@@ -1,0 +1,154 @@
+---
+title: "Get started with cbwsdid"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Get started with cbwsdid}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4
+)
+```
+
+`cbwsdid` implements Covariate-Balanced Weighted Stacked Difference-in-Differences
+(CBWSDID). The estimator follows the weighted stacked DID logic of Wing,
+Freedman, and Hollingsworth (2024) for across-subexperiment aggregation, but
+adds a first-stage design refinement inside each subexperiment. In practice, this means that matching or weighting is
+used to improve treated-control comparability within each cohort-specific
+subexperiment, while the final stacked weights continue to target the trimmed
+aggregate ATT.
+
+This short vignette uses the simulated panel dataset shipped with the package.
+Treatment timing in this dataset is related to observed covariates, and
+untreated outcome trends also depend on those covariates. That makes it useful
+for seeing why the refinement step is part of the main workflow.
+
+```{r setup, message = FALSE}
+library(cbwsdid)
+library(ggplot2)
+
+data(cbwsdid_sim)
+
+dat <- subset(cbwsdid_sim, id <= 150)
+head(dat)
+```
+
+## Estimate CBWSDID
+
+The main call below uses `refinement.method = "weightit"`. The covariates in
+`covs.formula` are read at pre-treatment event times inside each subexperiment;
+for example, `lag(outcome, 1:2)` uses the outcome measured one and two periods
+before treatment in the corresponding subexperiment.
+
+```{r fit-weightit, message = FALSE, warning = FALSE}
+fit_cbws <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 2),
+  refinement.method = "weightit",
+  covs.formula = ~ lag(outcome, 1:2) + lag(x1, 1:2),
+  refinement.args = list(method = "glm")
+)
+
+fit_cbws
+```
+
+`cbwsdid()` returns a `fixest` model object. The package-specific metadata is
+stored in `attr(fit, "cbwsdid")`.
+
+```{r metadata}
+names(attr(fit_cbws, "cbwsdid"))
+```
+
+## Quantities of interest
+
+The event-study coefficients can be reported directly, but `cbwsdid_qoi()`
+also returns compact post-estimation summaries.
+
+```{r qoi}
+dynamic_cbws <- cbwsdid_qoi(fit_cbws, type = "dynamic")
+simple_cbws <- cbwsdid_qoi(fit_cbws, type = "simple")
+
+dynamic_cbws
+simple_cbws
+```
+
+The reported standard errors are conditional cluster-robust intervals
+(clustered by unit, with the design weights treated as fixed). Analytic
+influence-function and pipeline-bootstrap alternatives are available through
+the `se.method` argument of `cbwsdid_qoi()`.
+
+The dynamic table is ready to plot.
+
+```{r dynamic-plot}
+ggplot(dynamic_cbws, aes(x = et, y = estimate)) +
+  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.3) +
+  geom_vline(xintercept = -0.5, color = "grey75", linetype = "dashed") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.08) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 0.4) +
+  scale_x_continuous(breaks = sort(dynamic_cbws$et)) +
+  labs(x = "Event time", y = "ATT")
+```
+
+Balance and subexperiment diagnostics are also available from the same fitted
+object. In the balance table, `smd.un` holds standardized mean differences on
+the full design sample and `smd.adj` after applying the refinement weights, so
+the comparison shows how much the first stage improved comparability; adjusted
+values within roughly 0.1 of zero are a common benchmark. The subexperiment
+summary reports which cohorts entered estimation and the size of their raw and
+refined donor pools.
+
+```{r diagnostics}
+cbwsdid_balance(fit_cbws)$overall
+cbwsdid_subexperiments(fit_cbws)$overall
+```
+
+## Compare with unrefined weighted stacked DID
+
+To fit weighted stacked DID without the first-stage refinement, set
+`refinement.method = "none"`. The comparison changes the within-subexperiment
+design adjustment while leaving the stacked DID event-study specification
+otherwise aligned.
+
+```{r fit-none}
+fit_ws <- cbwsdid(
+  data = dat,
+  y = "outcome",
+  d = "D",
+  id = c("id", "year"),
+  kappa = c(-2, 2),
+  refinement.method = "none"
+)
+
+cbwsdid_qoi(fit_ws, type = "dynamic")
+```
+
+Because both fitted objects are `fixest` models, `fixest::iplot()` can put the
+two event studies on the same figure.
+
+```{r compare-iplot}
+fixest::iplot(
+  list(
+    "CBWSDID (WeightIt)" = fit_cbws,
+    "Weighted stacked DID" = fit_ws
+  ),
+  ref.line = -1,
+  main = "Dynamic effects with and without refinement"
+)
+```
+
+## Where to go next
+
+The `quantities-of-interest` vignette covers the full set of post-estimation
+summaries (pooled and cohort effects, moderated effects, bootstrap inference);
+the `sensitivity-analysis` vignette shows how to feed CBWSDID event-study
+estimates into `HonestDiD`.

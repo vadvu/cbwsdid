@@ -24,7 +24,7 @@ cbwsdid_balance(
 A list with compact balance tables for the pooled sample and for each subexperiment.
 }
 \description{
-Computes standardized mean difference tables for the refinement covariates used in \code{\link[=cbwsdid]{cbwsdid()}}. Diagnostics are computed within subexperiments using the first-stage refinement weights rather than the final stacked weights.
+Computes standardized mean difference tables for the refinement covariates used in \code{\link[=cbwsdid]{cbwsdid()}}. Diagnostics are computed within subexperiments using the first-stage refinement weights rather than the final stacked weights. \code{Diff.Un} is computed on the full design sample, including units that refinement later discarded (e.g. unmatched controls), so it measures pre-refinement balance; \code{Diff.Adj} weights units by the first-stage refinement weights.
 }
 \examples{
 data(cbwsdid_sim)

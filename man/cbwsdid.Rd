@@ -20,6 +20,7 @@ cbwsdid(
   pooled = TRUE,
   keep_data = TRUE,
   moderation.formula = NULL,
+  outcome.formula = NULL,
   parallel = FALSE,
   slaves = NULL,
   refinement.args = NULL,
@@ -45,7 +46,7 @@ throughout the post-treatment window. Under \code{"relaxed"}, treated episodes
 are defined only by treatment onset at event time zero and may subsequently
 reverse within the event window.}
 
-\item{history.length}{Only used if design != \code{"absorbing"}. Length of treatment history used to define admissible switch-on or switch-off episode types. Required for switch designs.}
+\item{history.length}{Only used if design != \code{"absorbing"}. Length of treatment history used to define admissible switch-on or switch-off episode types. Defaults to \code{abs(kappa[1])}, so that control treatment paths are pinned down over the whole in-window pre-period, and cannot exceed it. Shorter values leave control treatment paths at event times deeper than \code{-history.length} unrestricted and trigger a warning.}
 
 \item{first_switch_only}{Only used if design != \code{"absorbing"}. Logical. If \code{TRUE}, keep only the first admissible switch episode for each unit in switch designs.}
 
@@ -55,11 +56,21 @@ reverse within the event window.}
 
 \item{exact.formula}{Optional formula describing exact matching or exact stratification variables. For example, \code{~ region}.}
 
-\item{pooled}{Logical. If \code{TRUE}, also estimate a pooled ATT regression on the same stacked sample and store it in the returned model metadata.}
+\item{pooled}{Logical. If \code{TRUE}, also estimate a standalone pooled ATT
+regression on the same stacked sample and store it for moderated pooled
+effects and backward compatibility. The overall
+\code{cbwsdid_qoi(type = "pooled")} is computed from the dynamic model and does
+not require this regression.}
 
-\item{keep_data}{Logical. If \code{TRUE}, store the stacked estimation sample with final weights in the returned model metadata. This is required for cohort-level post-estimation helpers.}
+\item{keep_data}{Logical. If \code{TRUE} (the default), store both the raw panel
+supplied to \code{cbwsdid()} and the stacked estimation sample with final
+weights in the returned model metadata. The raw panel is used by
+\code{cbwsdid_qoi(se.method = "bootstrap")}; the stacked sample is required for
+cohort-level post-estimation helpers.}
 
-\item{moderation.formula}{Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as \code{covs.formula}, for example \code{~ lag(y, 1)} or \code{~ lag(y, 1) + region}. Moderators are fully interacted with the treatment effect in additional second-stage models stored in the metadata.}
+\item{moderation.formula}{Optional formula describing pre-treatment moderators of the treatment effect. It supports the same simple syntax as \code{covs.formula}, for example \code{~ lag(y, 1)} or \code{~ lag(y, 1) + region}. Moderators enter additional second-stage models through event-time main effects and event-time-by-treatment interactions, so the moderated QOI is read as a marginal treatment effect at a supplied moderator profile.}
+
+\item{outcome.formula}{Optional formula describing pre-treatment covariates for the doubly robust outcome model. If supplied, \code{cbwsdid()} residualizes within-stack outcome changes by regressing untreated changes on these features before fitting the same weighted stacked DID regression. A common choice is to reuse \code{covs.formula}; for example, \code{outcome.formula = covs.formula}.}
 
 \item{parallel}{Logical. If \code{TRUE}, compute primary sub-experiments in parallel.}
 
@@ -87,16 +98,44 @@ In \code{covs.formula} and \code{exact.formula}, variables can be referenced eit
 the standardized internal names \code{id}, \code{time}, \code{y}, and \code{d}, or by the
 original variable names supplied to the corresponding function arguments.
 
-If \code{moderation.formula} is supplied, the same variable-reference rules apply.
-The listed moderators are treated as pre-treatment characteristics that fully
-modify the treatment effect in additional second-stage regressions. The main
-returned object remains the baseline dynamic event-study model without
-moderation; moderated models are stored in the \code{"cbwsdid"} metadata.
+Units with a missing value in any \code{covs.formula} or \code{exact.formula} feature
+are excluded from the design sample of the affected sub-experiment before
+refinement. Excluding a treated unit changes the estimand, so treated
+exclusions raise an error unless \code{allow_treated_drop = TRUE} (then a
+warning); control exclusions emit a message. In doubly robust fits, rows
+whose \code{outcome.formula} features (or base-period outcome) are missing cannot
+be residualized and enter the second stage with raw outcome changes, with a
+warning.
 
-If \code{keep_data = TRUE}, the \code{"cbwsdid"} metadata stores \code{stacked.data}, the
-stacked estimation sample with event time \code{et}, subexperiment identifier
-\code{subexp.id}, treatment-side indicator \code{treated_sa}, first-stage refinement
-weights \code{bsa}, and final stacked weights \code{Qsa}.
+If \code{moderation.formula} is supplied, the same variable-reference rules apply.
+The listed moderators are treated as pre-treatment characteristics. In the
+moderated dynamic model, each expanded moderator basis column enters as
+\code{i(et, moderator, ref = -1)} and is also interacted with treatment through
+\code{i(et, treated_sa * moderator, ref = -1)}. The moderator main effects let
+weighted controls estimate moderator-dependent counterfactual trends; the
+treatment interactions identify the difference in those gradients between
+treated units and controls. Raw \code{treated_sa} coefficients in the moderated
+model therefore describe the effect at moderator value zero, not the
+aggregate dynamic path. Use \code{\link[=cbwsdid_qoi]{cbwsdid_qoi()}} with \code{model_type = "moderated"}
+for marginal effects at meaningful profiles and inspect pre-period
+moderation slopes as placebo checks.
+
+If \code{outcome.formula} is supplied, \code{cbwsdid()} computes the doubly robust
+augmented estimator by fitting linear models of untreated within-stack outcome
+changes on pre-treatment covariates, then running the usual weighted stacked
+regression on the residualized outcome. The outcome model is a model of
+changes, not levels, and its right-hand side must use only pre-treatment
+features.
+
+If \code{keep_data = TRUE}, the \code{"cbwsdid"} metadata stores \code{data}, the raw panel
+supplied to \code{cbwsdid()}, and \code{stacked.data}, the stacked estimation sample
+with event time \code{et}, subexperiment identifier \code{subexp.id}, treatment-side
+indicator \code{treated_sa}, first-stage refinement weights \code{bsa}, and final
+stacked weights \code{Qsa}. For doubly robust fits, \code{stacked.data$y} is the
+residualized outcome used in the second stage and \code{stacked.data$y_raw}
+stores the original outcome. A compact \code{if_components} table is always
+stored, regardless of \code{keep_data}, for analytic influence-function
+inference.
 
 For switch-based designs, \code{post_path} controls the post-treatment path
 restriction on treated episodes. \code{"stable"} requires treated episodes to
